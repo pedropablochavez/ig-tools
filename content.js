@@ -285,6 +285,7 @@
 
   // Finds each like / comment / share row and adds a download button at its end.
   function addPostButtons() {
+    if (location.pathname.startsWith('/stories/')) return;
     for (const svg of document.querySelectorAll('svg[aria-label]')) {
       if (!LIKE_LABEL.test(svg.getAttribute('aria-label').trim())) continue;
       let group = svg.parentElement;
@@ -320,9 +321,84 @@
   }).observe(document.body, { childList: true, subtree: true });
   addPostButtons();
 
-  // The site is a single-page app: watch URL changes to show/hide the button.
+  // ---------- Story download ----------
+
+  const mediaByPk = new Map();
+  window.addEventListener('message', (e) => {
+    if (e.source !== window || e.data?.source !== 'ighd-items' || !Array.isArray(e.data.items)) return;
+    for (const it of e.data.items) {
+      if (typeof it?.pk !== 'string') continue;
+      const prev = mediaByPk.get(it.pk);
+      if (!prev || it.url || !prev.url) mediaByPk.set(it.pk, it);
+    }
+  });
+
+  const fileKey = (u) => {
+    try { return new URL(u).pathname.split('/').pop() || null; } catch (_) { return null; }
+  };
+
+  // The biggest photo or video currently on screen (the story being shown).
+  function visibleStoryMedia() {
+    let best = null;
+    let bestArea = 0;
+    for (const el of document.querySelectorAll('video, img')) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 150 || r.height < 150 || r.bottom < 0 || r.top > innerHeight) continue;
+      const area = r.width * r.height;
+      if (area > bestArea) {
+        best = el;
+        bestArea = area;
+      }
+    }
+    return best;
+  }
+
+  function currentStory() {
+    const m = location.pathname.match(/^\/stories\/([^/]+)\/(\d+)/);
+    if (m && m[1] !== 'highlights' && mediaByPk.get(m[2])?.url) return mediaByPk.get(m[2]);
+
+    // Highlights (and anything else): match what is on screen with the data the page loaded.
+    const el = visibleStoryMedia();
+    if (!el) return null;
+    const srcs = [el.currentSrc, el.src, el.poster].filter((u) => /^https:/.test(u || ''));
+    const keys = new Set(srcs.map(fileKey).filter(Boolean));
+    for (const it of mediaByPk.values()) {
+      if (keys.has(fileKey(it.url)) || keys.has(fileKey(it.thumb))) return it;
+    }
+    // Not in the data, but the element itself points to a real file.
+    if (srcs[0]) {
+      return { type: el.tagName === 'VIDEO' ? 'video' : 'image', url: srcs[0], pk: m?.[2] || 'story', username: m?.[1] || '' };
+    }
+    return null;
+  }
+
+  const storyBtn = document.createElement('button');
+  storyBtn.id = 'ighd-story-btn';
+  storyBtn.type = 'button';
+  storyBtn.title = 'Download this story';
+  storyBtn.innerHTML = `${DL_ICON}<span>Download story</span>`;
+  storyBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const it = currentStory();
+    if (!it?.url) {
+      toast(it ? 'This story video is only available as a stream and cannot be downloaded.'
+        : 'Story not loaded yet. Wait a moment and try again.');
+      return;
+    }
+    const user = it.username || location.pathname.split('/')[2] || 'story';
+    const ok = await download(it.url, `${user}_story_${it.pk}.${extFrom(it.url, it.type)}`);
+    toast(ok ? 'Story downloaded ✓' : 'Download failed');
+  });
+
+  // The site is a single-page app: watch URL changes to show/hide the buttons.
   let lastPath = null;
   function sync() {
+    const inStory = location.pathname.startsWith('/stories/');
+    if (inStory !== storyBtn.isConnected) {
+      if (inStory) document.body.appendChild(storyBtn);
+      else storyBtn.remove();
+    }
     if (location.pathname === lastPath && (btn.isConnected || !getUsername())) return;
     lastPath = location.pathname;
     if (getUsername()) {

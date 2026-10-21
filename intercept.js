@@ -65,6 +65,19 @@
       const post = toPost(node);
       if (post) out.media.push(post);
     }
+    // Single media items by numeric id. Stories are identified this way (/stories/<user>/<id>/).
+    const pk = node.pk ?? node.id;
+    if ((node.image_versions2 || node.video_versions) && pk != null) {
+      const item = mediaItem(node);
+      if (item) {
+        out.items.push({
+          ...item,
+          pk: String(pk).split('_')[0],
+          username: (node.user?.username || '').toLowerCase(),
+          thumb: biggest(node.image_versions2?.candidates)?.url || null
+        });
+      }
+    }
     for (const k in node) {
       const v = node[k];
       if (v && typeof v === 'object') collect(v, out, depth + 1);
@@ -92,22 +105,23 @@
     stats.responses++;
     if (!/profile_pic_url|image_versions2|video_versions|display_url/.test(text)) return;
     stats.withPics++;
-    const out = { pics: [], media: [] };
+    const out = { pics: [], media: [], items: [] };
     for (const obj of parseAll(text)) collect(obj, out, 0);
     publish(out);
   }
 
   function handleObject(obj) {
     stats.responses++;
-    const out = { pics: [], media: [] };
+    const out = { pics: [], media: [], items: [] };
     collect(obj, out, 0);
     publish(out);
   }
 
-  function publish({ pics, media }) {
+  function publish({ pics, media, items }) {
     for (const p of pics) stats.users.add(p.username);
     if (pics.length) window.postMessage({ source: 'ighd-pics', pics }, location.origin);
     if (media.length) window.postMessage({ source: 'ighd-media', media }, location.origin);
+    if (items.length) window.postMessage({ source: 'ighd-items', items }, location.origin);
   }
 
   // Data embedded in the HTML on page load.

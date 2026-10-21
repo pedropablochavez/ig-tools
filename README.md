@@ -1,9 +1,10 @@
-# HD Profile Picture Viewer
+# Instagram Tools (Unofficial)
 
 A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome, Edge) for instagram.com:
 
 - an **"HD photo"** button on profile pages to view the profile picture in full size, and
-- a **download** button next to like / comment / share to save the photos and videos of a post.
+- a **download** button next to like / comment / share to save the photos and videos of a post, and
+- a **Download story** button while watching stories.
 
 > **Unofficial project.** Not affiliated with, endorsed by, or sponsored by Instagram or Meta Platforms, Inc.
 > "Instagram" is a trademark of Meta Platforms, Inc. and is used here only to describe which website
@@ -15,6 +16,7 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
 - Full-size viewer with **Download** and **Open in new tab**. Press `Esc` or click outside to close.
 - **Download** button next to like / comment / share on posts and reels. It saves the original photo or
   video; for carousels it saves every item.
+- **Download story** button while watching a story or highlight. It saves the photo or video being shown.
 - No third-party websites, no ads, no copy-pasting links.
 
 ## Install (developer mode)
@@ -33,7 +35,7 @@ the page loads the full-size picture data the extension reads.
 The extension is **passive**. It does **not** call any API, scrape, or send any request of its own.
 
 - `intercept.js` runs in the page and reads the responses the site **already downloads for you** while you
-  browse normally, looking only for profile picture and post media URLs.
+  browse normally, looking only for profile picture, post and story media URLs.
 - `content.js` shows the buttons and the viewer, using the URLs for the profile or post you are looking at.
 - `background.js` only saves a file to your disk when you click a download button.
 
@@ -58,6 +60,7 @@ See [PRIVACY.md](PRIVACY.md).
 - Use it for personal, non-commercial viewing only.
 - Photos and videos belong to their owners and may be protected by copyright and personality/image rights.
   Do not republish, redistribute, or use other people's content without their permission.
+- Stories are meant to be temporary. Do not keep or share someone else's story without their consent.
 - Do not use this tool to harass, stalk, impersonate, or monitor anyone.
 - You are responsible for complying with Instagram's Terms of Use and with the laws of your country.
 

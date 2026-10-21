@@ -1,4 +1,5 @@
-#ighd-btn {
+#ighd-btn,
+#ighd-story-btn {
   position: fixed;
   right: 24px;
   bottom: 24px;
@@ -16,8 +17,12 @@
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-#ighd-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35); }
-#ighd-btn:active { transform: translateY(0); }
+#ighd-btn:hover,
+#ighd-story-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35); }
+#ighd-btn:active,
+#ighd-story-btn:active { transform: translateY(0); }
+#ighd-story-btn { z-index: 2147483003; }
+#ighd-story-btn svg { width: 18px; height: 18px; }
 
 #ighd-overlay {
   position: fixed;

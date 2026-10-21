@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "HD Profile Picture Viewer",
-  "version": "1.3.0",
-  "description": "Unofficial. View profile pictures in full size and download post photos and videos on instagram.com.",
+  "name": "Instagram Tools (Unofficial)",
+  "version": "1.4.0",
+  "description": "Unofficial. View profile pictures in full size and download posts, videos and stories on instagram.com. Not affiliated with Meta.",
   "permissions": ["downloads"],
   "host_permissions": ["https://www.instagram.com/*"],
   "background": {
