@@ -201,11 +201,33 @@
     if (e.source !== window || e.data?.source !== 'ighd-media' || !Array.isArray(e.data.media)) return;
     for (const m of e.data.media) {
       if (typeof m?.code !== 'string' || !Array.isArray(m.items)) continue;
-      const usable = (p) => p.items.filter((i) => i?.url).length;
-      const prev = mediaByCode.get(m.code);
-      if (!prev || usable(m) >= usable(prev)) mediaByCode.set(m.code, m);
+      mediaByCode.set(m.code, mergePost(mediaByCode.get(m.code), m));
     }
   });
+
+  // A real video file beats a still image, which beats nothing.
+  const itemScore = (it) => (!it?.url ? 0 : it.type === 'video' ? 2 : 1);
+
+  // The same post can arrive several times with different detail: keep the best of each item,
+  // and never let a thumbnail replace a video.
+  function mergePost(prev, next) {
+    if (!prev) return next;
+    if (prev.items.length !== next.items.length) {
+      const total = (p) => p.items.reduce((s, it) => s + itemScore(it), 0);
+      return total(next) >= total(prev) ? next : prev;
+    }
+    const items = prev.items.map((p, i) => {
+      const n = next.items[i];
+      const best = itemScore(n) > itemScore(p) ? { ...n } : { ...p };
+      if (p.type === 'video' || n.type === 'video') {
+        if (best.type !== 'video') best.url = null;
+        best.type = 'video';
+      }
+      best.thumb = best.thumb || p.thumb || n.thumb;
+      return best;
+    });
+    return { ...prev, username: prev.username || next.username, items };
+  }
 
   const POST_PATH = /\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,})/;
   // aria-label of the "like" icon in the most common interface languages.
@@ -251,15 +273,96 @@
     });
   }
 
-  const complete = (p) => !!p && p.items.length > 0 && p.items.every((i) => i.url);
+  const fileKey = (u) => {
+    try { return new URL(u).pathname.split('/').pop() || null; } catch (_) { return null; }
+  };
 
-  async function waitForComplete(code, ms) {
+  function srcKeys(el) {
+    const urls = [el.currentSrc, el.src, el.poster];
+    for (const part of (el.srcset || '').split(',')) urls.push(part.trim().split(/\s+/)[0]);
+    return new Set(urls.filter((u) => /^https:/.test(u || '')).map(fileKey).filter(Boolean));
+  }
+
+  // How much of an element is really visible: its box clipped by the viewport and by every
+  // ancestor that hides overflow (carousel slides off to the side end up with zero area).
+  function visibleArea(el, stop) {
+    const r = el.getBoundingClientRect();
+    let [x1, y1, x2, y2] = [r.left, r.top, r.right, r.bottom];
+    const clip = (b) => {
+      x1 = Math.max(x1, b.left); y1 = Math.max(y1, b.top);
+      x2 = Math.min(x2, b.right); y2 = Math.min(y2, b.bottom);
+    };
+    clip({ left: 0, top: 0, right: innerWidth, bottom: innerHeight });
+    for (let a = el.parentElement; a && a !== stop; a = a.parentElement) {
+      const cs = getComputedStyle(a);
+      if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') clip(a.getBoundingClientRect());
+      if (x2 <= x1 || y2 <= y1) return 0;
+    }
+    return Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  }
+
+  // Index from the carousel position: slides are shifted by multiples of their own width.
+  function slideIndex(el, stop) {
+    for (let a = el; a && a !== stop; a = a.parentElement) {
+      const m = (a.style?.transform || '').match(/translateX\((-?[\d.]+)px\)/);
+      if (m && a.offsetWidth) return Math.round(parseFloat(m[1]) / a.offsetWidth);
+    }
+    return -1;
+  }
+
+  // Which item of the post you are looking at, and whether it is shown as a video.
+  function selection(group, post) {
+    const scope = group.closest('article') || group.closest('[role="dialog"]') || document.body;
+    const n = post.items.length;
+    let shown = null;
+    let bestArea = 0;
+    for (const el of scope.querySelectorAll('img, video')) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 150 || r.height < 150) continue;
+      const area = visibleArea(el, scope.parentElement);
+      if (area > bestArea) {
+        shown = el;
+        bestArea = area;
+      }
+    }
+    // A video often sits on top of its own poster image: check videos covering the same spot.
+    const overlaps = (a, b) => {
+      const p = a.getBoundingClientRect();
+      const q = b.getBoundingClientRect();
+      const w = Math.min(p.right, q.right) - Math.max(p.left, q.left);
+      const h = Math.min(p.bottom, q.bottom) - Math.max(p.top, q.top);
+      return w > p.width * 0.5 && h > p.height * 0.5;
+    };
+    const showsVideo = !!shown && (shown.tagName === 'VIDEO' || [...scope.querySelectorAll('video')].some(
+      (v) => overlaps(shown, v) && visibleArea(v, scope.parentElement) > 0
+    ));
+    if (n === 1) return { index: 0, showsVideo };
+    if (!shown) return null;
+
+    // 1) Match the image file on screen with the post data.
+    const keys = srcKeys(shown);
+    let index = post.items.findIndex((it) => keys.has(fileKey(it.thumb)) || keys.has(fileKey(it.url)));
+    // 2) The carousel position.
+    if (index < 0) index = slideIndex(shown, scope);
+    // 3) A video on screen and only one video in the post.
+    if (index < 0 && showsVideo) {
+      const videos = post.items.map((it, i) => (it.type === 'video' ? i : -1)).filter((i) => i >= 0);
+      if (videos.length === 1) index = videos[0];
+    }
+    return index >= 0 && index < n ? { index, showsVideo } : null;
+  }
+
+  // An item is ready when it has a file and, if a video is on screen, that file is the video.
+  const ready = (it, showsVideo) => !!it?.url && (!showsVideo || it.type === 'video');
+
+  async function waitForItem(code, index, showsVideo, ms) {
     const end = Date.now() + ms;
     while (Date.now() < end) {
-      if (complete(mediaByCode.get(code))) return mediaByCode.get(code);
+      const it = mediaByCode.get(code)?.items[index];
+      if (ready(it, showsVideo)) return it;
       await new Promise((r) => setTimeout(r, 150));
     }
-    return mediaByCode.get(code) || null;
+    return null;
   }
 
   function permalinkFor(group, code) {
@@ -276,42 +379,38 @@
       toast('Could not identify this post.');
       return;
     }
-    let post = mediaByCode.get(code);
+    const post = mediaByCode.get(code);
+    if (!post) {
+      toast('Media not loaded yet. Open the post or scroll it into view, then try again.');
+      return;
+    }
+    const sel = selection(group, post);
+    if (!sel) {
+      toast('Could not tell which photo or video is selected. Open the post and try again.');
+      return;
+    }
+    let item = post.items[sel.index];
 
     // In the feed, videos often come only as a stream. Opening the post makes the site load
-    // the full .mp4 files; we pick them up, download them and go back to where you were.
-    if (!complete(post) && !location.pathname.includes(code)) {
+    // the full .mp4 file; we pick it up, download it and go back to where you were.
+    if (!ready(item, sel.showsVideo) && !location.pathname.includes(code)) {
       const link = permalinkFor(group, code);
       if (link) {
         toast('Loading the full video…');
         const before = location.href;
         link.click();
-        post = await waitForComplete(code, 8000);
+        item = await waitForItem(code, sel.index, sel.showsVideo, 8000);
         if (location.href !== before) history.back();
       }
     }
 
-    if (!post) {
-      toast('Media not loaded yet. Open the post or scroll it into view, then try again.');
-      return;
-    }
-    const items = post.items.filter((i) => i.url);
-    if (!items.length) {
+    if (!ready(item, sel.showsVideo)) {
       toast('This video is only available as a stream and cannot be downloaded.');
       return;
     }
-    const base = `${post.username || 'post'}_${code}`;
-    let ok = 0;
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      const suffix = items.length > 1 ? `_${i + 1}` : '';
-      if (await download(it.url, `${base}${suffix}.${extFrom(it.url, it.type)}`)) ok++;
-    }
-    const skipped = post.items.length - items.length;
-    toast(
-      `Downloaded ${ok} of ${items.length} file${items.length > 1 ? 's' : ''}` +
-      (skipped ? ` (${skipped} stream-only video${skipped > 1 ? 's' : ''} skipped)` : '')
-    );
+    const suffix = post.items.length > 1 ? `_${sel.index + 1}` : '';
+    const name = `${post.username || 'post'}_${code}${suffix}.${extFrom(item.url, item.type)}`;
+    toast((await download(item.url, name)) ? `Downloaded ${item.type} ✓` : 'Download failed');
   }
 
   const DL_ICON = `
@@ -366,13 +465,9 @@
     for (const it of e.data.items) {
       if (typeof it?.pk !== 'string') continue;
       const prev = mediaByPk.get(it.pk);
-      if (!prev || it.url || !prev.url) mediaByPk.set(it.pk, it);
+      if (!prev || itemScore(it) > itemScore(prev)) mediaByPk.set(it.pk, it);
     }
   });
-
-  const fileKey = (u) => {
-    try { return new URL(u).pathname.split('/').pop() || null; } catch (_) { return null; }
-  };
 
   // The biggest photo or video currently on screen (the story being shown).
   function visibleStoryMedia() {
@@ -398,7 +493,7 @@
     const el = visibleStoryMedia();
     if (!el) return null;
     const srcs = [el.currentSrc, el.src, el.poster].filter((u) => /^https:/.test(u || ''));
-    const keys = new Set(srcs.map(fileKey).filter(Boolean));
+    const keys = srcKeys(el);
     for (const it of mediaByPk.values()) {
       if (keys.has(fileKey(it.url)) || keys.has(fileKey(it.thumb))) return it;
     }
@@ -409,12 +504,7 @@
     return null;
   }
 
-  const storyBtn = document.createElement('button');
-  storyBtn.id = 'ighd-story-btn';
-  storyBtn.type = 'button';
-  storyBtn.title = 'Download this story';
-  storyBtn.innerHTML = `${DL_ICON}<span>Download story</span>`;
-  storyBtn.addEventListener('click', async (e) => {
+  async function downloadStory(e) {
     e.preventDefault();
     e.stopPropagation();
     const it = currentStory();
@@ -426,15 +516,57 @@
     const user = it.username || location.pathname.split('/')[2] || 'story';
     const ok = await download(it.url, `${user}_story_${it.pk}.${extFrom(it.url, it.type)}`);
     toast(ok ? 'Story downloaded ✓' : 'Download failed');
-  });
+  }
+
+  // Inside the story viewer, next to its like / share icons.
+  function addStoryButton() {
+    if (!location.pathname.startsWith('/stories/')) return false;
+    for (const svg of document.querySelectorAll('svg[aria-label]')) {
+      if (!LIKE_LABEL.test(svg.getAttribute('aria-label').trim())) continue;
+      const r = svg.getBoundingClientRect();
+      if (!r.width) continue;
+      let group = svg.parentElement;
+      for (let i = 0; i < 6 && group; i++) {
+        if (group.querySelectorAll('svg[aria-label]').length >= 2) break;
+        group = group.parentElement;
+      }
+      if (!group) continue;
+      if (group.querySelector('.ighd-dlstory')) return true;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ighd-dlpost ighd-dlstory';
+      b.title = 'Download this story';
+      b.setAttribute('aria-label', 'Download this story');
+      b.innerHTML = DL_ICON;
+      b.addEventListener('click', downloadStory);
+      group.appendChild(b);
+      return true;
+    }
+    return false;
+  }
+
+  // Floating fallback (for example on your own stories, which have no like button).
+  const storyBtn = document.createElement('button');
+  storyBtn.id = 'ighd-story-btn';
+  storyBtn.type = 'button';
+  storyBtn.title = 'Download this story';
+  storyBtn.innerHTML = `${DL_ICON}<span>Download story</span>`;
+  storyBtn.addEventListener('click', downloadStory);
+
+  // The story viewer may sit in the browser's top layer (an open <dialog>), above any z-index.
+  function storyHost() {
+    return document.querySelector('dialog[open]') || document.body;
+  }
 
   // The site is a single-page app: watch URL changes to show/hide the buttons.
   let lastPath = null;
   function sync() {
     const inStory = location.pathname.startsWith('/stories/');
-    if (inStory !== storyBtn.isConnected) {
-      if (inStory) document.body.appendChild(storyBtn);
-      else storyBtn.remove();
+    if (inStory && !addStoryButton()) {
+      const host = storyHost();
+      if (storyBtn.parentElement !== host) host.appendChild(storyBtn);
+    } else if (storyBtn.isConnected) {
+      storyBtn.remove();
     }
     if (location.pathname === lastPath && (btn.isConnected || !getUsername())) return;
     lastPath = location.pathname;

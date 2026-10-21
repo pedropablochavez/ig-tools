@@ -14,10 +14,12 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
 
 - Floating **HD photo** button on profile pages.
 - Full-size viewer with **Download** and **Open in new tab**. Press `Esc` or click outside to close.
-- **Download** button next to like / comment / share on posts and reels. It saves the original photo or
-  video; for carousels it saves every item. If the feed only has a streamed version of a video, it briefly
-  opens the post so the site loads the full file, downloads it, and takes you back.
-- **Download story** button while watching a story or highlight. It saves the photo or video being shown.
+- **Download** button next to like / comment / share on posts and reels. It saves only the photo or video
+  you are looking at (in a carousel, the current slide), in its original quality. If the feed only has a
+  streamed version of a video, it briefly opens the post so the site loads the full file, downloads it, and
+  takes you back.
+- **Download** button in the story viewer, next to like / share (or a floating button on your own stories).
+  It saves the photo or video being shown.
 - No third-party websites, no ads, no copy-pasting links.
 
 ## Install (developer mode)

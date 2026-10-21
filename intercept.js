@@ -25,13 +25,17 @@
   // One photo or video of a post, at the largest size available.
   function mediaItem(n) {
     if (!n || typeof n !== 'object') return null;
-    const video = biggest(n.video_versions)?.url || n.video_url;
-    if (video && validUrl(video)) return { type: 'video', url: video };
-    if (n.media_type === 2 || n.is_video) return { type: 'video', url: null };
     const image = biggest(n.image_versions2?.candidates)?.url
       || biggest(n.display_resources)?.src
       || n.display_url;
-    if (image && validUrl(image)) return { type: 'image', url: image };
+    const thumb = image && validUrl(image) ? image : null;
+    const video = biggest(n.video_versions)?.url || n.video_url;
+    if (video && validUrl(video)) return { type: 'video', url: video, thumb };
+    // Feed data often has no downloadable file for videos; these fields still give them away.
+    const isVideo = n.media_type === 2 || n.is_video || !!n.video_dash_manifest
+      || n.video_duration > 0 || n.product_type === 'clips' || n.product_type === 'igtv';
+    if (isVideo) return { type: 'video', url: null, thumb };
+    if (thumb) return { type: 'image', url: thumb, thumb };
     return null;
   }
 
@@ -73,8 +77,7 @@
         out.items.push({
           ...item,
           pk: String(pk).split('_')[0],
-          username: (node.user?.username || '').toLowerCase(),
-          thumb: biggest(node.image_versions2?.candidates)?.url || null
+          username: (node.user?.username || '').toLowerCase()
         });
       }
     }
