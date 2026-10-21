@@ -19,9 +19,8 @@
     return name;
   }
 
-  // Messages come from intercept.js in this page, or in one of our hidden prefetch frames.
-  const prefetchWindows = new Set();
-  const fromPage = (e) => e.origin === location.origin && (e.source === window || prefetchWindows.has(e.source));
+  // Messages come from intercept.js, running in this same page.
+  const fromPage = (e) => e.source === window && e.origin === location.origin;
 
   // ---------- Data ----------
   // This extension never sends requests of its own to Instagram. It only reads the
@@ -572,37 +571,73 @@
     }
   }
 
-  // Plays the post's song while the mouse is over the post.
-  function hoverPlay(scope) {
-    const b = scope.querySelector('.ighd-music');
-    if (!b || userPaused.has(b.dataset.code)) return;
-    if (playing?.button === b && !player.paused) return;
-    startMusic(b, b.dataset.code, false);
+  // Plays the song of the post you are looking at, like reels: the photo post that fills most
+  // of the screen. Scrolling to another post switches to its song; no post on screen, silence.
+  function focusedMusicButton() {
+    const dialog = document.querySelector('[role="dialog"]');
+    let best = null;
+    let bestFrac = 0;
+    for (const b of document.querySelectorAll('.ighd-music')) {
+      if (dialog && !dialog.contains(b)) continue; // a post window covers the feed
+      const box = b.closest('.ighd-music-wrap')?.parentElement;
+      if (!box) continue;
+      const r = box.getBoundingClientRect();
+      const area = r.width * r.height;
+      const frac = area ? visibleArea(box, null) / area : 0;
+      if (frac > bestFrac) {
+        best = b;
+        bestFrac = frac;
+      }
+    }
+    return bestFrac >= 0.6 ? best : null;
   }
 
+  let focusQueued = false;
+  function updateFocusPlay() {
+    if (focusQueued) return;
+    focusQueued = true;
+    requestAnimationFrame(() => {
+      focusQueued = false;
+      if (document.hidden) {
+        player.pause();
+        return;
+      }
+      const b = focusedMusicButton();
+      if (!b) {
+        if (playing && !player.paused) player.pause();
+        return;
+      }
+      if (playing?.button === b && !player.paused) return;
+      if (playing?.button !== b) {
+        // Moving to another post forgets a manual pause on the previous one.
+        if (playing) userPaused.delete(playing.code);
+        if (!player.paused) player.pause();
+      }
+      if (!userPaused.has(b.dataset.code)) startMusic(b, b.dataset.code, false);
+    });
+  }
+  window.addEventListener('scroll', updateFocusPlay, { passive: true, capture: true });
+  window.addEventListener('resize', updateFocusPlay);
+  document.addEventListener('visibilitychange', updateFocusPlay);
+
+  // Hovering a post also asks for its song right away (see below).
   function watchHover(scope) {
     if (scope.dataset.igtHover) return;
     scope.dataset.igtHover = '1';
-    scope.addEventListener('mouseenter', () => {
-      hoverPlay(scope);
-      requestPrefetch(scope);
-    });
-    scope.addEventListener('mouseleave', () => {
-      if (playing && scope.contains(playing.button)) player.pause();
-      const b = scope.querySelector('.ighd-music');
-      if (b) userPaused.delete(b.dataset.code);
-    });
+    scope.addEventListener('mouseenter', () => requestPrefetch(scope));
   }
 
   // ---------- Finding the song of feed posts ----------
-  // The feed data has no song, but the author's profile does. When you stop on a photo post
-  // whose song is unknown, the author's profile is loaded once in a hidden, sandboxed frame:
-  // the same page you would see by opening it. intercept.js runs there too and passes the data
-  // back. One profile at a time, each account only once per visit.
+  // The feed data has no song, but the request the site makes to show a profile's posts does.
+  // intercept.js learns that request the first time you open any profile and can repeat it for
+  // the author of a photo post you stop on: the same request the site makes when you open their
+  // profile. One account at a time, each only once per visit.
 
   const profileTried = new Set();
   const prefetchQueue = [];
   let prefetchBusy = false;
+  let needsTemplate = false;
+  let toldAboutTemplate = false;
   const dwellTimers = new WeakMap();
 
   const prefetchObserver = new IntersectionObserver((entries) => {
@@ -613,7 +648,7 @@
           dwellTimers.set(scope, setTimeout(() => {
             dwellTimers.delete(scope);
             requestPrefetch(scope);
-          }, 700));
+          }, 500));
         }
       } else {
         clearTimeout(dwellTimers.get(scope));
@@ -629,37 +664,63 @@
     if (!post || post.music || post.items.every((it) => it.type === 'video')) return;
     const user = post.username;
     if (!user || profileTried.has(user)) return;
+    if (needsTemplate) {
+      if (!toldAboutTemplate) {
+        toldAboutTemplate = true;
+        toast('To find songs in the feed, open any profile once. IG Tools will remember how.');
+      }
+      return;
+    }
     profileTried.add(user);
-    prefetchQueue.push({ user, code });
+    prefetchQueue.push(user);
     if (prefetchQueue.length > 5) prefetchQueue.shift();
     runPrefetch();
+  }
+
+  function loadSongs(user) {
+    return new Promise((resolve) => {
+      const done = (e) => {
+        if (!fromPage(e) || e.data?.source !== 'ighd-load-songs-result' || e.data.user !== user) return;
+        window.removeEventListener('message', done);
+        clearTimeout(timer);
+        resolve(e.data);
+      };
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', done);
+        resolve({ ok: false, reason: 'timeout' });
+      }, 10000);
+      window.addEventListener('message', done);
+      window.postMessage({ source: 'ighd-load-songs', user }, location.origin);
+    });
   }
 
   async function runPrefetch() {
     if (prefetchBusy || !prefetchQueue.length) return;
     prefetchBusy = true;
-    const { user, code } = prefetchQueue.pop(); // the post you stopped on most recently first
-    const frame = document.createElement('iframe');
-    frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-    frame.setAttribute('aria-hidden', 'true');
-    frame.tabIndex = -1;
-    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1000px;height:900px;border:0;opacity:0;pointer-events:none';
-    frame.src = `/${encodeURIComponent(user)}/?igt_prefetch=1`;
-    document.documentElement.appendChild(frame);
-    const win = frame.contentWindow;
-    prefetchWindows.add(win);
-    const end = Date.now() + 15000;
-    while (Date.now() < end && !mediaByCode.get(code)?.music) {
-      await new Promise((r) => setTimeout(r, 250));
+    const user = prefetchQueue.pop(); // the post you stopped on most recently first
+    const result = await loadSongs(user);
+    if (result.reason === 'no-template') {
+      needsTemplate = true;
+      profileTried.delete(user);
+      prefetchQueue.length = 0;
+      prefetchBusy = false;
+      return;
     }
-    await new Promise((r) => setTimeout(r, 800)); // let the rest of that profile's posts arrive
-    prefetchWindows.delete(win);
-    frame.remove();
     setTimeout(() => {
       prefetchBusy = false;
       runPrefetch();
-    }, 1500);
+    }, 1200);
   }
+
+  // intercept.js just learned the request (you opened a profile): retry the posts on screen.
+  window.addEventListener('message', (e) => {
+    if (!fromPage(e) || e.data?.source !== 'ighd-template-ready') return;
+    needsTemplate = false;
+    for (const scope of document.querySelectorAll('article[data-igt-watch]')) {
+      const r = scope.getBoundingClientRect();
+      if (r.bottom > 0 && r.top < innerHeight) requestPrefetch(scope);
+    }
+  });
 
   function watchPost(group) {
     const scope = group.closest('article');
@@ -750,7 +811,7 @@
     refreshMusicIcons();
     musicVisibility.observe(scope);
     watchHover(scope);
-    if (scope.matches(':hover')) hoverPlay(scope);
+    updateFocusPlay();
   }
 
   function addDownloadButton(group) {

@@ -154,7 +154,8 @@
   // Counters for the diagnostic line shown in the viewer.
   const stats = { responses: 0, withPics: 0, users: new Set() };
 
-  function handleText(text) {
+  // `req`: the request that produced this response (method, url, body, headers), if known.
+  function handleText(text, req) {
     if (typeof text !== 'string') return;
     stats.responses++;
     if (!/profile_pic_url|image_versions2|video_versions|display_url|music|audio/.test(text)) return;
@@ -162,21 +163,19 @@
     const out = { pics: [], media: [], items: [] };
     for (const obj of parseAll(text)) collect(obj, out, 0);
     publish(out);
+    learnProfileRequest(out.media, req);
   }
 
-  function handleObject(obj) {
+  function handleObject(obj, req) {
     stats.responses++;
     const out = { pics: [], media: [], items: [] };
     collect(obj, out, 0);
     publish(out);
+    learnProfileRequest(out.media, req);
   }
 
-  // Inside a hidden prefetch frame (see content.js), results also go to the page that opened it.
-  const targets = [window];
-  try { if (window.top !== window && window.top.location.origin === location.origin) targets.push(window.top); } catch (_) {}
-
   function send(msg) {
-    for (const t of targets) t.postMessage(msg, location.origin);
+    window.postMessage(msg, location.origin);
   }
 
   function publish({ pics, media, items }) {
@@ -193,42 +192,205 @@
     }
   }
 
+  // ---------- Songs of feed posts ----------
+  // The feed data has no song, but the request the site makes to show a profile's posts does.
+  // The first time you open any profile, we remember how that request looks (it has the
+  // username in it). For a photo post in your feed, content.js then asks us to make that same
+  // request for the post's author, exactly as the site does when you open their profile.
+
+  const TEMPLATE_KEY = 'igt-profile-request';
+  const USER_CHARS = 'A-Za-z0-9._';
+  const userRe = (u, flags) => new RegExp(
+    `(^|[^${USER_CHARS}])${u.replace(/\./g, '\\.')}(?=[^${USER_CHARS}]|$)`, flags
+  );
+  const latestTokens = {}; // fb_dtsg / lsd / jazoest from the site's latest requests
+
+  let template = null;
+  try { template = JSON.parse(localStorage.getItem(TEMPLATE_KEY)); } catch (_) {}
+
+  function noteTokens(body) {
+    if (typeof body !== 'string' || !body.includes('=')) return;
+    try {
+      const params = new URLSearchParams(body);
+      for (const k of ['fb_dtsg', 'lsd', 'jazoest']) if (params.get(k)) latestTokens[k] = params.get(k);
+    } catch (_) {}
+  }
+
+  const isForm = (body) => typeof body === 'string' && /^[^{\[]*=/.test(body);
+  const safeDecode = (x) => { try { return decodeURIComponent(x); } catch (_) { return x; } };
+
+  // Readable text of a request (form values and URL decoded), to look for a username in it.
+  function requestText(req) {
+    let body = req.body || '';
+    if (isForm(body)) {
+      try { body = [...new URLSearchParams(body).values()].join(' '); } catch (_) {}
+    }
+    return `${safeDecode(req.url)} ${body}`;
+  }
+
+  // Same request with another username: replaced inside the URL path, the query values and
+  // the form values (decoded), so encoded JSON like variables={"username":"..."} works too.
+  function swapUser(req, from, to) {
+    const re = userRe(from, 'gi');
+    const rep = (x) => x.replace(re, `$1${to}`);
+    const url = new URL(req.url, location.href);
+    url.pathname = url.pathname.split('/').map((seg) => rep(safeDecode(seg))).join('/');
+    for (const [k, v] of [...url.searchParams]) url.searchParams.set(k, rep(v));
+    let body = req.body;
+    if (isForm(body)) {
+      const params = new URLSearchParams(body);
+      for (const [k, v] of [...params]) params.set(k, rep(v));
+      for (const [k, v] of Object.entries(latestTokens)) if (params.has(k)) params.set(k, v);
+      body = params.toString();
+    } else if (typeof body === 'string') {
+      body = rep(body);
+    }
+    return { url: url.href, body };
+  }
+
+  function learnProfileRequest(media, req) {
+    if (!req || !media.length) return;
+    const text = requestText(req);
+    // Only first pages: a request with a cursor would not work for another account.
+    if (/max_id=|"after":"|%22after%22%3A%22/.test(text)) return;
+    for (const post of media) {
+      const u = post.music && post.username;
+      if (!u || !userRe(u, 'i').test(text)) continue;
+      const fresh = !template;
+      template = { method: req.method, url: req.url, body: req.body, headers: req.headers, user: u };
+      try { localStorage.setItem(TEMPLATE_KEY, JSON.stringify(template)); } catch (_) {}
+      if (fresh) send({ source: 'ighd-template-ready' });
+      return;
+    }
+  }
+
+  function cookie(name) {
+    const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  async function loadProfileSongs(user) {
+    if (!template) return { ok: false, reason: 'no-template' };
+    let url;
+    let body;
+    try {
+      ({ url, body } = swapUser(template, template.user, user));
+    } catch (e) {
+      return { ok: false, reason: e.message };
+    }
+    const headers = { ...(template.headers || {}) };
+    for (const k of Object.keys(headers)) {
+      const lk = k.toLowerCase();
+      if (lk === 'x-csrftoken' && cookie('csrftoken')) headers[k] = cookie('csrftoken');
+      if (lk === 'x-fb-lsd' && latestTokens.lsd) headers[k] = latestTokens.lsd;
+    }
+    try {
+      const res = await origFetch(url, {
+        method: template.method || 'GET',
+        headers,
+        body: template.method === 'GET' ? undefined : body,
+        credentials: 'include'
+      });
+      handleText(await res.text(), null);
+      return { ok: res.ok, status: res.status };
+    } catch (e) {
+      return { ok: false, reason: e.message };
+    }
+  }
+
+  // ---------- Watching the site's own requests ----------
+
   // When logged in, profile data is loaded from /api/graphql (no trailing slash).
   const interesting = (url) => /graphql|\/api\/|\/ajax\//.test(String(url));
 
+  function plainHeaders(h) {
+    const out = {};
+    try {
+      if (!h) return out;
+      if (h instanceof Headers) h.forEach((v, k) => { out[k] = v; });
+      else if (Array.isArray(h)) for (const [k, v] of h) out[k] = v;
+      else Object.assign(out, h);
+    } catch (_) {}
+    return out;
+  }
+
+  function bodyText(b) {
+    if (typeof b === 'string') return b;
+    if (b instanceof URLSearchParams) return b.toString();
+    return null;
+  }
+
   const origFetch = window.fetch;
   window.fetch = async function (...args) {
-    const res = await origFetch.apply(this, args);
+    const a = args[0];
+    const init = args[1] || {};
+    let req = null;
     try {
-      const a = args[0];
       const url = a instanceof Request ? a.url : String(a);
-      if (interesting(url)) res.clone().text().then(handleText, () => {});
+      if (interesting(url)) {
+        req = {
+          method: String(init.method || (a instanceof Request ? a.method : 'GET')).toUpperCase(),
+          url,
+          body: bodyText(init.body),
+          headers: plainHeaders(init.headers || (a instanceof Request ? a.headers : null))
+        };
+        noteTokens(req.body);
+      }
     } catch (_) {}
+    const res = await origFetch.apply(this, args);
+    if (req) res.clone().text().then((t) => handleText(t, req), () => {});
     return res;
   };
 
   const origOpen = XMLHttpRequest.prototype.open;
+  const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+  const origSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-    if (interesting(url)) {
+    this.__igt = interesting(url)
+      ? { method: String(method || 'GET').toUpperCase(), url: new URL(url, location.href).href, body: null, headers: {} }
+      : null;
+    if (this.__igt) {
       this.addEventListener('load', () => {
         try {
-          if (this.responseType === '' || this.responseType === 'text') handleText(this.responseText);
-          else if (this.responseType === 'json') handleObject(this.response);
+          if (this.responseType === '' || this.responseType === 'text') handleText(this.responseText, this.__igt);
+          else if (this.responseType === 'json') handleObject(this.response, this.__igt);
         } catch (_) {}
       });
     }
     return origOpen.call(this, method, url, ...rest);
   };
+  XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+    if (this.__igt) this.__igt.headers[k] = v;
+    return origSetHeader.call(this, k, v);
+  };
+  XMLHttpRequest.prototype.send = function (body) {
+    if (this.__igt) {
+      this.__igt.body = bodyText(body);
+      noteTokens(this.__igt.body);
+    }
+    return origSend.call(this, body);
+  };
 
-  window.addEventListener('message', (e) => {
-    if (e.source !== window || e.data?.source !== 'ighd-scan') return;
-    scanEmbedded();
-    window.postMessage({
-      source: 'ighd-stats',
-      responses: stats.responses,
-      withPics: stats.withPics,
-      users: stats.users.size
-    }, location.origin);
+  window.addEventListener('message', async (e) => {
+    if (e.source !== window) return;
+    if (e.data?.source === 'ighd-scan') {
+      scanEmbedded();
+      send({
+        source: 'ighd-stats',
+        responses: stats.responses,
+        withPics: stats.withPics,
+        users: stats.users.size
+      });
+    } else if (e.data?.source === 'ighd-load-songs' && typeof e.data.user === 'string') {
+      const result = await loadProfileSongs(e.data.user);
+      send({ source: 'ighd-load-songs-result', user: e.data.user, ...result });
+    }
+  });
+
+  // Diagnostic for the browser console.
+  window.igtSongStatus = () => ({
+    learned: !!template,
+    learnedFrom: template ? `${template.method} ${template.url.split('?')[0]}` : null
   });
 
   if (document.readyState === 'loading') {

@@ -20,11 +20,10 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
   takes you back.
 - **Download** button in the story viewer, next to like / share (or a floating button on your own stories).
   It saves the photo or video being shown.
-- **♪ Music** on photo posts that have a song attached (as in the mobile app): it plays the exact clip the
-  author picked, in a loop, while the mouse is over the post, and pauses when you leave it or scroll away.
-  A floating ♪ button on the photo plays / pauses it, with a volume slider that shows on hover (remembered).
-  The feed does not include the song, so when you stop on a photo post the author's profile is loaded once
-  in a hidden frame to find it (see *How it works*).
+- **♪ Music** on photo posts that have a song attached (as in the mobile app): like reels, the song of the
+  post you are looking at plays (the exact clip the author picked, in a loop) and stops when you scroll to
+  another post. A floating ♪ button on the photo pauses / resumes it, with a volume slider that shows on
+  hover (remembered). The feed does not include the song; see *How it works* for how it is found.
 - Fixes "photo + music" stories (a still image turned into a 1 fps video), which in some players stay
   black for ~10 seconds: the frame timing is adjusted so the picture shows right away. Image and audio are
   not re-encoded.
@@ -43,16 +42,16 @@ the page loads the full-size picture data the extension reads.
 
 ## How it works
 
-The extension does **not** call any API or scrape anything. Besides the photo or video you click to
-download, the only thing it loads is, for the music feature, the profile page of the author of a photo post
-you stop on in your feed: once per account and visit, one at a time, in a hidden sandboxed frame. It is the
-same page you would see by opening that profile.
+The extension does not scrape anything. Besides the photo or video you click to download, the only
+request it makes is for the music feature: the feed has no song, but the request the site makes to show a
+profile's posts does. The first time you open any profile, the extension remembers how that request looks,
+and for a photo post you stop on in your feed it repeats that same request for the post's author (exactly
+what the site does when you open their profile). Once per account and visit, one at a time.
 
 - `intercept.js` runs in the page and reads the responses the site **already downloads for you** while you
-  browse normally, looking only for profile picture, post, story and post music URLs.
+  browse normally, looking only for profile picture, post, story and post music URLs. It also keeps the
+  shape of the site's "profile posts" request (in the site's own local storage) to find songs.
 - `content.js` shows the buttons and the viewer, using the URLs for the profile or post you are looking at.
-- `rules.json` lets only those hidden profile frames (marked with `igt_prefetch=1` and opened from
-  instagram.com) load inside the page; framing protection stays in place for every other site.
 - `mp4fix.js` adjusts the frame timing of 1 fps "photo + music" videos before they are saved.
 - `background.js` only saves a file to your disk when you click a download button.
 
@@ -68,7 +67,7 @@ This extension collects **no data at all**:
 - No analytics, tracking, telemetry, or remote servers.
 - Nothing is stored or transmitted. Picture URLs live in memory in the current tab and disappear when you close it.
 - The only permissions it requests are access to `www.instagram.com` (to show the buttons), `downloads`
-  (to save a file when you ask it to) and `declarativeNetRequest` (to allow its own hidden profile frames).
+  (to save a file when you ask it to).
 
 See [PRIVACY.md](PRIVACY.md).
 
