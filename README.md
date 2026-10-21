@@ -37,10 +37,10 @@ The extension is **passive**. It does **not** call any API, scrape, or send any 
 - `content.js` shows the buttons and the viewer, using the URLs for the profile or post you are looking at.
 - `background.js` only saves a file to your disk when you click a download button.
 
-It can only show a picture that the site itself already sent to your browser. That means it cannot reveal
-anything you could not already see: it does not access private accounts, posts, stories, messages, or any
-other content. Profile pictures are publicly visible on Instagram, and the official mobile app already lets
-you view them in a larger size.
+It only works with content the site itself already sent to your browser, so it cannot reveal anything you
+could not already see, and it does not bypass private accounts or any other access restriction. Profile
+pictures are publicly visible on Instagram, and the official mobile app already lets you view them in a
+larger size.
 
 ## Privacy
 
@@ -48,8 +48,8 @@ This extension collects **no data at all**:
 
 - No analytics, tracking, telemetry, or remote servers.
 - Nothing is stored or transmitted. Picture URLs live in memory in the current tab and disappear when you close it.
-- The only permissions it requests are access to `www.instagram.com` (to show the button) and `downloads`
-  (to save a picture when you ask it to).
+- The only permissions it requests are access to `www.instagram.com` (to show the buttons) and `downloads`
+  (to save a file when you ask it to).
 
 See [PRIVACY.md](PRIVACY.md).
 
