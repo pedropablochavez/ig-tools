@@ -1,8 +1,8 @@
-# Instagram Tools (Unofficial)
+# IG Tools (Unofficial)
 
 A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome, Edge) for instagram.com:
 
-- an **"HD photo"** button on profile pages to view the profile picture in full size, and
+- an **"HD photo"** button on profile pages to view the profile picture in full size,
 - a **download** button next to like / comment / share to save the photos and videos of a post, and
 - a **Download story** button while watching stories.
 
@@ -15,7 +15,8 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
 - Floating **HD photo** button on profile pages.
 - Full-size viewer with **Download** and **Open in new tab**. Press `Esc` or click outside to close.
 - **Download** button next to like / comment / share on posts and reels. It saves the original photo or
-  video; for carousels it saves every item.
+  video; for carousels it saves every item. If the feed only has a streamed version of a video, it briefly
+  opens the post so the site loads the full file, downloads it, and takes you back.
 - **Download story** button while watching a story or highlight. It saves the photo or video being shown.
 - No third-party websites, no ads, no copy-pasting links.
 

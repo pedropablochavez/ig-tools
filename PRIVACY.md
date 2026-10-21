@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Instagram Tools (Unofficial)** does not collect, store, sell, or share any personal data.
+**IG Tools (Unofficial)** does not collect, store, sell, or share any personal data.
 
 - **No data collection.** The extension has no analytics, telemetry, tracking, or remote server.
 - **No network requests of its own.** It only reads, inside your own browser tab, the profile picture, post

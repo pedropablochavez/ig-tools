@@ -251,9 +251,46 @@
     });
   }
 
+  const complete = (p) => !!p && p.items.length > 0 && p.items.every((i) => i.url);
+
+  async function waitForComplete(code, ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (complete(mediaByCode.get(code))) return mediaByCode.get(code);
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return mediaByCode.get(code) || null;
+  }
+
+  function permalinkFor(group, code) {
+    const scope = group.closest('article') || document;
+    return [...scope.querySelectorAll('a[href]')].find((a) => {
+      const m = a.getAttribute('href').match(POST_PATH);
+      return m && m[1] === code;
+    }) || null;
+  }
+
   async function downloadPost(group) {
     const code = codeFor(group);
-    const post = code && mediaByCode.get(code);
+    if (!code) {
+      toast('Could not identify this post.');
+      return;
+    }
+    let post = mediaByCode.get(code);
+
+    // In the feed, videos often come only as a stream. Opening the post makes the site load
+    // the full .mp4 files; we pick them up, download them and go back to where you were.
+    if (!complete(post) && !location.pathname.includes(code)) {
+      const link = permalinkFor(group, code);
+      if (link) {
+        toast('Loading the full video…');
+        const before = location.href;
+        link.click();
+        post = await waitForComplete(code, 8000);
+        if (location.href !== before) history.back();
+      }
+    }
+
     if (!post) {
       toast('Media not loaded yet. Open the post or scroll it into view, then try again.');
       return;
