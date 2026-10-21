@@ -20,8 +20,8 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
   takes you back.
 - **Download** button in the story viewer, next to like / share (or a floating button on your own stories).
   It saves the photo or video being shown.
-- **♪ Music** button on photo posts that have a song attached (as in the mobile app): plays the exact clip
-  the author picked, in a loop, and pauses when the post scrolls out of view. It only appears when the
+- **♪ Music** button floating on the photo of posts that have a song attached (as in the mobile app): plays
+  the exact clip the author picked, in a loop, and pauses when the post scrolls out of view. It only appears when the
   post data the site loads includes the song.
 - Fixes "photo + music" stories (a still image turned into a 1 fps video), which in some players stay
   black for ~10 seconds: the frame timing is adjusted so the picture shows right away. Image and audio are

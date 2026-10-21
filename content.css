@@ -133,3 +133,25 @@
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 #ighd-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* Music button floating on top of a photo post (no background, like the mobile app) */
+.ighd-music {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #fff;
+  cursor: pointer;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8)) drop-shadow(0 0 6px rgba(0, 0, 0, 0.45));
+  transition: transform 0.15s ease;
+}
+.ighd-music:hover { transform: scale(1.12); }
+.ighd-music svg { width: 26px; height: 26px; }

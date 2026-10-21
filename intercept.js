@@ -39,6 +39,21 @@
     return null;
   }
 
+  // Diagnostic: which music-related fields each post arrived with. In the browser console,
+  // `igtMusicFields()` lists them, to see whether the feed data carries the song at all.
+  const musicFields = new Map();
+  function noteMusicFields(code, keys, hasSong) {
+    if (typeof code !== 'string') return;
+    const prev = musicFields.get(code);
+    if (prev?.hasSong) return;
+    musicFields.set(code, { hasSong, fields: keys.join(', ') || '(none)', from: location.pathname });
+    if (musicFields.size > 200) musicFields.delete(musicFields.keys().next().value);
+  }
+  window.igtMusicFields = () => {
+    console.table(Object.fromEntries(musicFields));
+    return musicFields.size;
+  };
+
   // Music attached to a photo post (what the mobile app plays): the audio file plus the clip
   // the author picked. Looked up under any "music" field of the post, whatever its exact shape.
   function findMusic(node) {
@@ -58,9 +73,13 @@
         }
       }
     };
+    const keys = [];
     for (const [k, v] of Object.entries(node)) {
-      if (/music/i.test(k) && v && typeof v === 'object') walk(v, 0);
+      if (!/music|audio|sound/i.test(k)) continue;
+      keys.push(`${k}:${v === null ? 'null' : typeof v}`);
+      if (v && typeof v === 'object') walk(v, 0);
     }
+    noteMusicFields(node.code || node.shortcode, keys, !!found.url);
     if (!found.url) return null;
     return {
       url: found.url,
@@ -138,7 +157,7 @@
   function handleText(text) {
     if (typeof text !== 'string') return;
     stats.responses++;
-    if (!/profile_pic_url|image_versions2|video_versions|display_url|music/.test(text)) return;
+    if (!/profile_pic_url|image_versions2|video_versions|display_url|music|audio/.test(text)) return;
     stats.withPics++;
     const out = { pics: [], media: [], items: [] };
     for (const obj of parseAll(text)) collect(obj, out, 0);

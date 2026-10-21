@@ -236,6 +236,30 @@
   const POST_PATH = /\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,})/;
   // aria-label of the "like" icon in the most common interface languages.
   const LIKE_LABEL = /^(like|unlike|me gusta|ya no me gusta|curtir|descurtir|j[’']aime|je n[’']aime plus|gefällt mir|gefällt mir nicht mehr|mi piace|non mi piace più)$/i;
+  const COMMENT_LABEL = /^(comment|comentar|commenter|kommentieren|commenta|comentário)$/i;
+  const labelOf = (svg) => (svg.getAttribute('aria-label') || '').trim();
+  // The post bar uses 24px icons; comments use small 12px hearts.
+  const bigIcon = (svg) => Number(svg.getAttribute('width')) >= 20 || svg.getBoundingClientRect().width >= 20;
+
+  // The like / comment / share row of a post: the smallest box holding the big like icon and the
+  // comment icon, and no other big like icon (so never a comment, nor several posts at once).
+  function postBars() {
+    const bars = new Set();
+    for (const svg of document.querySelectorAll('svg[aria-label]')) {
+      if (!LIKE_LABEL.test(labelOf(svg)) || !bigIcon(svg)) continue;
+      let group = svg.parentElement;
+      for (let i = 0; i < 10 && group; i++) {
+        const icons = [...group.querySelectorAll('svg[aria-label]')];
+        if (icons.some((s) => COMMENT_LABEL.test(labelOf(s)))) {
+          const likes = icons.filter((s) => LIKE_LABEL.test(labelOf(s)) && bigIcon(s));
+          if (likes.length === 1) bars.add(group);
+          break;
+        }
+        group = group.parentElement;
+      }
+    }
+    return bars;
+  }
 
   function codeFor(group) {
     const scope = group.closest('article') || group.closest('[role="dialog"]');
@@ -477,8 +501,13 @@
   player.addEventListener('timeupdate', () => {
     if (!playing) return;
     if (!playing.button.isConnected) {
-      player.pause();
-      return;
+      // The site re-rendered the post: follow the new button, or stop if the post is gone.
+      const again = document.querySelector(`.ighd-music[data-code="${playing.code}"]`);
+      if (again) playing.button = again;
+      else {
+        player.pause();
+        return;
+      }
     }
     const { start, duration } = playing.music;
     if (player.currentTime >= (start + duration) / 1000) player.currentTime = start / 1000;
@@ -515,15 +544,57 @@
     }
   }
 
+  // The box that shows the post's photo (the carousel window for carousels): the highest
+  // ancestor of the media on screen that has exactly the size of what is visible.
+  function mediaBox(scope) {
+    let shown = null;
+    let bestArea = 0;
+    for (const el of scope.querySelectorAll('img, video')) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 150 || r.height < 150) continue;
+      const area = visibleArea(el, scope.parentElement);
+      if (area > bestArea) {
+        shown = el;
+        bestArea = area;
+      }
+    }
+    if (!shown) return null;
+    // Visible size of the media, clipped by its ancestors only (not by the screen).
+    let { left: x1, top: y1, right: x2, bottom: y2 } = shown.getBoundingClientRect();
+    for (let a = shown.parentElement; a && a !== scope; a = a.parentElement) {
+      const cs = getComputedStyle(a);
+      if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
+      const b = a.getBoundingClientRect();
+      x1 = Math.max(x1, b.left); y1 = Math.max(y1, b.top);
+      x2 = Math.min(x2, b.right); y2 = Math.min(y2, b.bottom);
+    }
+    const w = x2 - x1;
+    const h = y2 - y1;
+    let box = null;
+    for (let a = shown.parentElement; a && a !== scope; a = a.parentElement) {
+      const b = a.getBoundingClientRect();
+      if (Math.abs(b.width - w) <= 4 && Math.abs(b.height - h) <= 4) box = a;
+      else if (b.width > w + 4 && b.height > h + 4) break;
+    }
+    return box;
+  }
+
   function addMusicButton(group) {
-    if (group.querySelector('.ighd-music')) return;
+    // Feed post, post window, or a post page opened directly.
+    const scope = group.closest('article') || group.closest('[role="dialog"]') || group.closest('main');
+    if (!scope || scope.querySelector('.ighd-music')) return;
     const code = codeFor(group);
-    if (!code || !mediaByCode.get(code)?.music) return;
+    const post = code && mediaByCode.get(code);
+    if (!post?.music) return;
     // Videos and reels already have their own sound.
-    if (mediaByCode.get(code).items.every((it) => it.type === 'video')) return;
+    if (post.items.every((it) => it.type === 'video')) return;
+    const box = mediaBox(scope);
+    if (!box) return;
+    if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'ighd-dlpost ighd-music';
+    b.className = 'ighd-music';
+    b.dataset.code = code;
     b.setAttribute('aria-label', 'Play or pause this post\'s music');
     b.innerHTML = MUSIC_ICON;
     b.title = 'Play this post\'s music';
@@ -532,37 +603,34 @@
       e.stopPropagation();
       toggleMusic(b, code);
     });
-    const dl = group.querySelector('.ighd-dlpost:not(.ighd-music)');
-    group.insertBefore(b, dl);
-    musicVisibility.observe(group.closest('article') || group);
+    box.appendChild(b);
+    if (playing?.code === code) playing.button = b;
+    refreshMusicIcons();
+    musicVisibility.observe(scope);
   }
 
-  // Finds each like / comment / share row and adds the download (and music) buttons at its end.
+  function addDownloadButton(group) {
+    if (group.querySelector('.ighd-dlpost')) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ighd-dlpost';
+    b.title = 'Download photo / video';
+    b.setAttribute('aria-label', 'Download photo or video');
+    b.innerHTML = DL_ICON;
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      downloadPost(group);
+    });
+    group.appendChild(b);
+  }
+
+  // Adds the download button to each post's like / comment / share row, and the music button
+  // on top of the photo when the post has a song.
   function addPostButtons() {
     if (location.pathname.startsWith('/stories/')) return;
-    for (const svg of document.querySelectorAll('svg[aria-label]')) {
-      if (!LIKE_LABEL.test(svg.getAttribute('aria-label').trim())) continue;
-      let group = svg.parentElement;
-      for (let i = 0; i < 8 && group; i++) {
-        if (group.querySelectorAll('svg[aria-label]').length >= 3) break;
-        group = group.parentElement;
-      }
-      if (!group) continue;
-      if (!group.dataset.ighdDl) {
-        group.dataset.ighdDl = '1';
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'ighd-dlpost';
-        b.title = 'Download photo / video';
-        b.setAttribute('aria-label', 'Download photo or video');
-        b.innerHTML = DL_ICON;
-        b.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          downloadPost(group);
-        });
-        group.appendChild(b);
-      }
+    for (const group of postBars()) {
+      addDownloadButton(group);
       addMusicButton(group);
     }
   }
@@ -577,6 +645,7 @@
     }, 400);
   }
   new MutationObserver(queueScan).observe(document.body, { childList: true, subtree: true });
+  window.addEventListener('scroll', queueScan, { passive: true });
   addPostButtons();
 
   // ---------- Story download ----------
