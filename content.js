@@ -199,10 +199,13 @@
   const mediaByCode = new Map();
   window.addEventListener('message', (e) => {
     if (e.source !== window || e.data?.source !== 'ighd-media' || !Array.isArray(e.data.media)) return;
+    let music = false;
     for (const m of e.data.media) {
       if (typeof m?.code !== 'string' || !Array.isArray(m.items)) continue;
       mediaByCode.set(m.code, mergePost(mediaByCode.get(m.code), m));
+      if (m.music) music = true;
     }
+    if (music) queueScan();
   });
 
   // A real video file beats a still image, which beats nothing.
@@ -212,9 +215,10 @@
   // and never let a thumbnail replace a video.
   function mergePost(prev, next) {
     if (!prev) return next;
+    const music = prev.music || next.music || null;
     if (prev.items.length !== next.items.length) {
       const total = (p) => p.items.reduce((s, it) => s + itemScore(it), 0);
-      return total(next) >= total(prev) ? next : prev;
+      return { ...(total(next) >= total(prev) ? next : prev), music };
     }
     const items = prev.items.map((p, i) => {
       const n = next.items[i];
@@ -226,7 +230,7 @@
       best.thumb = best.thumb || p.thumb || n.thumb;
       return best;
     });
-    return { ...prev, username: prev.username || next.username, items };
+    return { ...prev, username: prev.username || next.username, items, music };
   }
 
   const POST_PATH = /\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,})/;
@@ -441,7 +445,99 @@
       <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
     </svg>`;
 
-  // Finds each like / comment / share row and adds a download button at its end.
+  // ---------- Music on photo posts ----------
+  // The mobile app plays the song attached to a photo post; the website does not. When the post
+  // data includes that song, a ♪ button plays the exact clip the author picked, in a loop.
+
+  const MUSIC_ICON = `
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+      <path d="M9 18V5l11-2v13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="6" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+      <circle cx="17" cy="16" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+    </svg>`;
+  const PAUSE_ICON = `
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+      <rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/>
+      <rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>
+    </svg>`;
+
+  const player = new Audio();
+  player.preload = 'auto';
+  let playing = null; // { code, music, button }
+
+  function refreshMusicIcons() {
+    for (const b of document.querySelectorAll('.ighd-music')) {
+      const on = !!playing && playing.button === b && !player.paused;
+      b.innerHTML = on ? PAUSE_ICON : MUSIC_ICON;
+      b.title = on ? 'Pause music' : 'Play this post\'s music';
+    }
+  }
+  player.addEventListener('play', refreshMusicIcons);
+  player.addEventListener('pause', refreshMusicIcons);
+  player.addEventListener('timeupdate', () => {
+    if (!playing) return;
+    if (!playing.button.isConnected) {
+      player.pause();
+      return;
+    }
+    const { start, duration } = playing.music;
+    if (player.currentTime >= (start + duration) / 1000) player.currentTime = start / 1000;
+  });
+
+  // Pause when the post scrolls out of view, like the app does.
+  const musicVisibility = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (playing && e.target.contains(playing.button) && e.intersectionRatio < 0.3) player.pause();
+    }
+  }, { threshold: [0, 0.3] });
+
+  async function toggleMusic(button, code) {
+    const music = mediaByCode.get(code)?.music;
+    if (!music) return;
+    if (playing?.button === button && !player.paused) {
+      player.pause();
+      return;
+    }
+    if (playing?.button !== button) {
+      playing = { code, music, button };
+      if (player.src !== music.url) player.src = music.url;
+      if (player.readyState < 1) {
+        await new Promise((r) => player.addEventListener('loadedmetadata', r, { once: true }));
+      }
+      player.currentTime = music.start / 1000;
+      const name = [music.title, music.artist].filter(Boolean).join(' · ');
+      if (name) toast(`♪ ${name}`);
+    }
+    try {
+      await player.play();
+    } catch (_) {
+      toast('Could not play the music.');
+    }
+  }
+
+  function addMusicButton(group) {
+    if (group.querySelector('.ighd-music')) return;
+    const code = codeFor(group);
+    if (!code || !mediaByCode.get(code)?.music) return;
+    // Videos and reels already have their own sound.
+    if (mediaByCode.get(code).items.every((it) => it.type === 'video')) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ighd-dlpost ighd-music';
+    b.setAttribute('aria-label', 'Play or pause this post\'s music');
+    b.innerHTML = MUSIC_ICON;
+    b.title = 'Play this post\'s music';
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleMusic(b, code);
+    });
+    const dl = group.querySelector('.ighd-dlpost:not(.ighd-music)');
+    group.insertBefore(b, dl);
+    musicVisibility.observe(group.closest('article') || group);
+  }
+
+  // Finds each like / comment / share row and adds the download (and music) buttons at its end.
   function addPostButtons() {
     if (location.pathname.startsWith('/stories/')) return;
     for (const svg of document.querySelectorAll('svg[aria-label]')) {
@@ -451,32 +547,36 @@
         if (group.querySelectorAll('svg[aria-label]').length >= 3) break;
         group = group.parentElement;
       }
-      if (!group || group.dataset.ighdDl || group.querySelector('.ighd-dlpost')) continue;
-      group.dataset.ighdDl = '1';
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'ighd-dlpost';
-      b.title = 'Download photo / video';
-      b.setAttribute('aria-label', 'Download photo or video');
-      b.innerHTML = DL_ICON;
-      b.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        downloadPost(group);
-      });
-      group.appendChild(b);
+      if (!group) continue;
+      if (!group.dataset.ighdDl) {
+        group.dataset.ighdDl = '1';
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ighd-dlpost';
+        b.title = 'Download photo / video';
+        b.setAttribute('aria-label', 'Download photo or video');
+        b.innerHTML = DL_ICON;
+        b.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          downloadPost(group);
+        });
+        group.appendChild(b);
+      }
+      addMusicButton(group);
     }
   }
 
   let scanQueued = false;
-  new MutationObserver(() => {
+  function queueScan() {
     if (scanQueued) return;
     scanQueued = true;
     setTimeout(() => {
       scanQueued = false;
       addPostButtons();
     }, 400);
-  }).observe(document.body, { childList: true, subtree: true });
+  }
+  new MutationObserver(queueScan).observe(document.body, { childList: true, subtree: true });
   addPostButtons();
 
   // ---------- Story download ----------

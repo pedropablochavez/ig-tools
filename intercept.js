@@ -39,6 +39,38 @@
     return null;
   }
 
+  // Music attached to a photo post (what the mobile app plays): the audio file plus the clip
+  // the author picked. Looked up under any "music" field of the post, whatever its exact shape.
+  function findMusic(node) {
+    const found = {};
+    const walk = (o, depth) => {
+      if (!o || typeof o !== 'object' || depth > 6) return;
+      for (const [k, v] of Object.entries(o)) {
+        if (typeof v === 'string') {
+          if (!found.url && /progressive_download_url$/.test(k) && validUrl(v)) found.url = v;
+          else if (k === 'title' && !found.title) found.title = v;
+          else if (k === 'display_artist' && !found.artist) found.artist = v;
+        } else if (typeof v === 'number') {
+          if (k === 'audio_asset_start_time_in_ms' && found.start == null) found.start = v;
+          else if (k === 'overlap_duration_in_ms' && found.duration == null) found.duration = v;
+        } else if (v && typeof v === 'object') {
+          walk(v, depth + 1);
+        }
+      }
+    };
+    for (const [k, v] of Object.entries(node)) {
+      if (/music/i.test(k) && v && typeof v === 'object') walk(v, 0);
+    }
+    if (!found.url) return null;
+    return {
+      url: found.url,
+      start: found.start || 0,
+      duration: found.duration || 30000,
+      title: found.title || '',
+      artist: found.artist || ''
+    };
+  }
+
   function toPost(node) {
     const code = node.code || node.shortcode;
     const children = node.carousel_media || node.edge_sidecar_to_children?.edges?.map((e) => e.node);
@@ -47,7 +79,7 @@
       .filter(Boolean);
     if (!items.length) return null;
     const username = (node.user?.username || node.owner?.username || '').toLowerCase();
-    return { code, username, items };
+    return { code, username, items, music: findMusic(node) };
   }
 
   function collect(node, out, depth) {
@@ -106,7 +138,7 @@
   function handleText(text) {
     if (typeof text !== 'string') return;
     stats.responses++;
-    if (!/profile_pic_url|image_versions2|video_versions|display_url/.test(text)) return;
+    if (!/profile_pic_url|image_versions2|video_versions|display_url|music/.test(text)) return;
     stats.withPics++;
     const out = { pics: [], media: [], items: [] };
     for (const obj of parseAll(text)) collect(obj, out, 0);
