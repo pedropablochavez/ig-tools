@@ -20,6 +20,9 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
   takes you back.
 - **Download** button in the story viewer, next to like / share (or a floating button on your own stories).
   It saves the photo or video being shown.
+- Fixes "photo + music" stories (a still image turned into a 1 fps video), which in some players stay
+  black for ~10 seconds: the frame timing is adjusted so the picture shows right away. Image and audio are
+  not re-encoded.
 - No third-party websites, no ads, no copy-pasting links.
 
 ## Install (developer mode)
@@ -35,11 +38,13 @@ the page loads the full-size picture data the extension reads.
 
 ## How it works
 
-The extension is **passive**. It does **not** call any API, scrape, or send any request of its own.
+The extension is **passive**. It does **not** call any API or scrape anything. The only file it ever
+fetches is the photo or video you click to download.
 
 - `intercept.js` runs in the page and reads the responses the site **already downloads for you** while you
   browse normally, looking only for profile picture, post and story media URLs.
 - `content.js` shows the buttons and the viewer, using the URLs for the profile or post you are looking at.
+- `mp4fix.js` adjusts the frame timing of 1 fps "photo + music" videos before they are saved.
 - `background.js` only saves a file to your disk when you click a download button.
 
 It only works with content the site itself already sent to your browser, so it cannot reveal anything you

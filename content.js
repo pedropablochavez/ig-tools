@@ -273,6 +273,28 @@
     });
   }
 
+  const toDataUrl = (buf, type) => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(new Blob([buf], { type }));
+  });
+
+  // Videos go through mp4fix.js first, which repairs 1 fps "photo + music" stories so the
+  // picture shows right away. Anything else (or if reading the file fails) downloads as is.
+  async function downloadMedia(it, filename) {
+    if (it.type === 'video' && typeof globalThis.igtFixLowFpsMp4 === 'function') {
+      try {
+        const res = await fetch(it.url);
+        if (res.ok) {
+          const fixed = globalThis.igtFixLowFpsMp4(await res.arrayBuffer());
+          if (fixed) return download(await toDataUrl(fixed, 'video/mp4'), filename);
+        }
+      } catch (_) {}
+    }
+    return download(it.url, filename);
+  }
+
   const fileKey = (u) => {
     try { return new URL(u).pathname.split('/').pop() || null; } catch (_) { return null; }
   };
@@ -410,7 +432,7 @@
     }
     const suffix = post.items.length > 1 ? `_${sel.index + 1}` : '';
     const name = `${post.username || 'post'}_${code}${suffix}.${extFrom(item.url, item.type)}`;
-    toast((await download(item.url, name)) ? `Downloaded ${item.type} ✓` : 'Download failed');
+    toast((await downloadMedia(item, name)) ? `Downloaded ${item.type} ✓` : 'Download failed');
   }
 
   const DL_ICON = `
@@ -514,7 +536,7 @@
       return;
     }
     const user = it.username || location.pathname.split('/')[2] || 'story';
-    const ok = await download(it.url, `${user}_story_${it.pk}.${extFrom(it.url, it.type)}`);
+    const ok = await downloadMedia(it, `${user}_story_${it.pk}.${extFrom(it.url, it.type)}`);
     toast(ok ? 'Story downloaded ✓' : 'Download failed');
   }
 

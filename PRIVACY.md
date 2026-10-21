@@ -4,7 +4,8 @@
 
 - **No data collection.** The extension has no analytics, telemetry, tracking, or remote server.
 - **No network requests of its own.** It only reads, inside your own browser tab, the profile picture, post
-  and story media URLs that the website already loaded for you.
+  and story media URLs that the website already loaded for you. The only file it fetches is the one you click
+  to download, directly from Instagram's servers.
 - **No storage.** Media URLs are kept in memory in the current tab only and are discarded when the tab
   is closed or reloaded.
 - **Downloads.** When you click **Download**, the file is saved to your computer using your browser's

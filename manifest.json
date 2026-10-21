@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "IG Tools (Unofficial)",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Unofficial. View profile pictures in full size and download posts, videos and stories on instagram.com. Not affiliated with Meta.",
   "permissions": ["downloads"],
   "host_permissions": ["https://www.instagram.com/*"],
@@ -17,7 +17,7 @@
     },
     {
       "matches": ["https://www.instagram.com/*"],
-      "js": ["content.js"],
+      "js": ["mp4fix.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
     }
