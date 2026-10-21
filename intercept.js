@@ -163,7 +163,15 @@
     const out = { pics: [], media: [], items: [] };
     for (const obj of parseAll(text)) collect(obj, out, 0);
     publish(out);
+    logSongs(out.media, req);
     learnProfileRequest(out.media, req);
+  }
+
+  function logSongs(media, req) {
+    const users = [...new Set(media.filter((p) => p.music).map((p) => p.username))];
+    if (!users.length) return;
+    const from = req ? `${req.method} ${shortUrl(req.url)}` : 'page HTML (no request)';
+    slog(`songs from ${from} for @${users.slice(0, 5).join(', @')}`);
   }
 
   function handleObject(obj, req) {
@@ -171,6 +179,7 @@
     const out = { pics: [], media: [], items: [] };
     collect(obj, out, 0);
     publish(out);
+    logSongs(out.media, req);
     learnProfileRequest(out.media, req);
   }
 
@@ -197,6 +206,14 @@
   // The first time you open any profile, we remember how that request looks (it has the
   // username in it). For a photo post in your feed, content.js then asks us to make that same
   // request for the post's author, exactly as the site does when you open their profile.
+
+  // Step-by-step log of the song feature, shown by igtSongStatus() in the browser console.
+  const songLog = [];
+  function slog(msg) {
+    songLog.push(`${new Date().toLocaleTimeString()} ${msg}`);
+    if (songLog.length > 60) songLog.shift();
+  }
+  const shortUrl = (u) => String(u || '').split('?')[0].replace(/^https:\/\/www\.instagram\.com/, '');
 
   const TEMPLATE_KEY = 'igt-profile-request';
   const USER_CHARS = 'A-Za-z0-9._';
@@ -251,11 +268,20 @@
   function learnProfileRequest(media, req) {
     if (!req || !media.length) return;
     const text = requestText(req);
+    if (!media.some((p) => p.music)) return;
     // Only first pages: a request with a cursor would not work for another account.
-    if (/max_id=|"after":"|%22after%22%3A%22/.test(text)) return;
+    if (/max_id=|"after":"|%22after%22%3A%22/.test(text)) {
+      slog(`not learned (next page of results): ${shortUrl(req.url)}`);
+      return;
+    }
     for (const post of media) {
       const u = post.music && post.username;
-      if (!u || !userRe(u, 'i').test(text)) continue;
+      if (!u) continue;
+      if (!userRe(u, 'i').test(text)) {
+        slog(`not learned (username @${u} not in the request): ${req.method} ${shortUrl(req.url)}`);
+        continue;
+      }
+      slog(`learned profile request from @${u}: ${req.method} ${shortUrl(req.url)}`);
       const fresh = !template;
       template = { method: req.method, url: req.url, body: req.body, headers: req.headers, user: u };
       try { localStorage.setItem(TEMPLATE_KEY, JSON.stringify(template)); } catch (_) {}
@@ -270,7 +296,10 @@
   }
 
   async function loadProfileSongs(user) {
-    if (!template) return { ok: false, reason: 'no-template' };
+    if (!template) {
+      slog(`asked for @${user}: nothing learned yet (open any profile once)`);
+      return { ok: false, reason: 'no-template' };
+    }
     let url;
     let body;
     try {
@@ -291,9 +320,15 @@
         body: template.method === 'GET' ? undefined : body,
         credentials: 'include'
       });
-      handleText(await res.text(), null);
+      const text = await res.text();
+      const before = songLog.length;
+      handleText(text, null);
+      const found = songLog.length > before;
+      slog(`asked for @${user}: HTTP ${res.status}, ${found ? 'songs found' : 'no songs in the answer'}` +
+        (res.ok ? '' : ` (${text.slice(0, 120).replace(/\s+/g, ' ')})`));
       return { ok: res.ok, status: res.status };
     } catch (e) {
+      slog(`asked for @${user}: failed (${e.message})`);
       return { ok: false, reason: e.message };
     }
   }
@@ -381,6 +416,8 @@
         withPics: stats.withPics,
         users: stats.users.size
       });
+    } else if (e.data?.source === 'ighd-log' && typeof e.data.text === 'string') {
+      slog(e.data.text);
     } else if (e.data?.source === 'ighd-load-songs' && typeof e.data.user === 'string') {
       const result = await loadProfileSongs(e.data.user);
       send({ source: 'ighd-load-songs-result', user: e.data.user, ...result });
@@ -388,10 +425,11 @@
   });
 
   // Diagnostic for the browser console.
-  window.igtSongStatus = () => ({
-    learned: !!template,
-    learnedFrom: template ? `${template.method} ${template.url.split('?')[0]}` : null
-  });
+  window.igtSongStatus = () => {
+    console.log(`learned: ${!!template}${template ? ` (${template.method} ${shortUrl(template.url)}, from @${template.user})` : ''}`);
+    console.log(songLog.join('\n') || '(no events yet)');
+    return songLog.length;
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', scanEmbedded);

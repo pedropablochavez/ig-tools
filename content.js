@@ -657,13 +657,23 @@
     }
   }, { threshold: [0, 0.6] });
 
+  const logged = new Set();
+  function songLog(text) {
+    if (logged.has(text)) return;
+    logged.add(text);
+    window.postMessage({ source: 'ighd-log', text: `feed: ${text}` }, location.origin);
+  }
+
   function requestPrefetch(scope) {
     const group = scope.__igtGroup;
     const code = group && codeFor(group);
     const post = code && mediaByCode.get(code);
-    if (!post || post.music || post.items.every((it) => it.type === 'video')) return;
+    if (!code) return songLog('a post without a link to identify it');
+    if (!post) return songLog(`post ${code}: no data for it yet`);
+    if (post.music || post.items.every((it) => it.type === 'video')) return;
     const user = post.username;
-    if (!user || profileTried.has(user)) return;
+    if (!user) return songLog(`post ${code}: author unknown in the data`);
+    if (profileTried.has(user)) return;
     if (needsTemplate) {
       if (!toldAboutTemplate) {
         toldAboutTemplate = true;
@@ -672,6 +682,7 @@
       return;
     }
     profileTried.add(user);
+    songLog(`post ${code}: asking for @${user}'s songs`);
     prefetchQueue.push(user);
     if (prefetchQueue.length > 5) prefetchQueue.shift();
     runPrefetch();
