@@ -171,11 +171,19 @@
     publish(out);
   }
 
+  // Inside a hidden prefetch frame (see content.js), results also go to the page that opened it.
+  const targets = [window];
+  try { if (window.top !== window && window.top.location.origin === location.origin) targets.push(window.top); } catch (_) {}
+
+  function send(msg) {
+    for (const t of targets) t.postMessage(msg, location.origin);
+  }
+
   function publish({ pics, media, items }) {
     for (const p of pics) stats.users.add(p.username);
-    if (pics.length) window.postMessage({ source: 'ighd-pics', pics }, location.origin);
-    if (media.length) window.postMessage({ source: 'ighd-media', media }, location.origin);
-    if (items.length) window.postMessage({ source: 'ighd-items', items }, location.origin);
+    if (pics.length) send({ source: 'ighd-pics', pics });
+    if (media.length) send({ source: 'ighd-media', media });
+    if (items.length) send({ source: 'ighd-items', items });
   }
 
   // Data embedded in the HTML on page load.

@@ -19,6 +19,10 @@
     return name;
   }
 
+  // Messages come from intercept.js in this page, or in one of our hidden prefetch frames.
+  const prefetchWindows = new Set();
+  const fromPage = (e) => e.origin === location.origin && (e.source === window || prefetchWindows.has(e.source));
+
   // ---------- Data ----------
   // This extension never sends requests of its own to Instagram. It only reads the
   // profile picture URLs that the page already received while you browse (see intercept.js).
@@ -27,7 +31,7 @@
   let interceptStats = null;
 
   window.addEventListener('message', (e) => {
-    if (e.source !== window) return;
+    if (!fromPage(e)) return;
     if (e.data?.source === 'ighd-stats') {
       interceptStats = e.data;
       return;
@@ -198,7 +202,7 @@
 
   const mediaByCode = new Map();
   window.addEventListener('message', (e) => {
-    if (e.source !== window || e.data?.source !== 'ighd-media' || !Array.isArray(e.data.media)) return;
+    if (!fromPage(e) || e.data?.source !== 'ighd-media' || !Array.isArray(e.data.media)) return;
     let music = false;
     for (const m of e.data.media) {
       if (typeof m?.code !== 'string' || !Array.isArray(m.items)) continue;
@@ -488,12 +492,27 @@
   const player = new Audio();
   player.preload = 'auto';
   let playing = null; // { code, music, button }
+  const userPaused = new Set(); // posts you paused with the button while the mouse is on them
+
+  // Volume, remembered between visits.
+  const VOLUME_KEY = 'igt-music-volume';
+  try {
+    const saved = parseFloat(localStorage.getItem(VOLUME_KEY));
+    player.volume = Number.isFinite(saved) ? Math.min(1, Math.max(0, saved)) : 0.7;
+  } catch (_) {
+    player.volume = 0.7;
+  }
+  function setVolume(v) {
+    player.volume = v;
+    try { localStorage.setItem(VOLUME_KEY, String(v)); } catch (_) {}
+    for (const r of document.querySelectorAll('.ighd-vol')) r.value = String(v);
+  }
 
   function refreshMusicIcons() {
     for (const b of document.querySelectorAll('.ighd-music')) {
       const on = !!playing && playing.button === b && !player.paused;
       b.innerHTML = on ? PAUSE_ICON : MUSIC_ICON;
-      b.title = on ? 'Pause music' : 'Play this post\'s music';
+      b.title = on ? 'Pause music' : "Play this post's music";
     }
   }
   player.addEventListener('play', refreshMusicIcons);
@@ -520,28 +539,136 @@
     }
   }, { threshold: [0, 0.3] });
 
-  async function toggleMusic(button, code) {
+  // `fromClick`: started with the button (shows the song name and reports errors).
+  async function startMusic(button, code, fromClick) {
     const music = mediaByCode.get(code)?.music;
     if (!music) return;
-    if (playing?.button === button && !player.paused) {
-      player.pause();
-      return;
-    }
-    if (playing?.button !== button) {
+    if (playing?.button !== button || playing.code !== code) {
       playing = { code, music, button };
       if (player.src !== music.url) player.src = music.url;
       if (player.readyState < 1) {
         await new Promise((r) => player.addEventListener('loadedmetadata', r, { once: true }));
       }
+      if (playing?.code !== code) return; // another post took over meanwhile
       player.currentTime = music.start / 1000;
-      const name = [music.title, music.artist].filter(Boolean).join(' · ');
-      if (name) toast(`♪ ${name}`);
     }
+    const name = [music.title, music.artist].filter(Boolean).join(' · ');
     try {
       await player.play();
+      if (fromClick && name) toast(`♪ ${name}`);
     } catch (_) {
-      toast('Could not play the music.');
+      // Browsers block sound until you have clicked somewhere on the page once.
+      if (fromClick) toast('Could not play the music.');
     }
+  }
+
+  function toggleMusic(button, code) {
+    if (playing?.button === button && !player.paused) {
+      player.pause();
+      userPaused.add(code);
+    } else {
+      userPaused.delete(code);
+      startMusic(button, code, true);
+    }
+  }
+
+  // Plays the post's song while the mouse is over the post.
+  function hoverPlay(scope) {
+    const b = scope.querySelector('.ighd-music');
+    if (!b || userPaused.has(b.dataset.code)) return;
+    if (playing?.button === b && !player.paused) return;
+    startMusic(b, b.dataset.code, false);
+  }
+
+  function watchHover(scope) {
+    if (scope.dataset.igtHover) return;
+    scope.dataset.igtHover = '1';
+    scope.addEventListener('mouseenter', () => {
+      hoverPlay(scope);
+      requestPrefetch(scope);
+    });
+    scope.addEventListener('mouseleave', () => {
+      if (playing && scope.contains(playing.button)) player.pause();
+      const b = scope.querySelector('.ighd-music');
+      if (b) userPaused.delete(b.dataset.code);
+    });
+  }
+
+  // ---------- Finding the song of feed posts ----------
+  // The feed data has no song, but the author's profile does. When you stop on a photo post
+  // whose song is unknown, the author's profile is loaded once in a hidden, sandboxed frame:
+  // the same page you would see by opening it. intercept.js runs there too and passes the data
+  // back. One profile at a time, each account only once per visit.
+
+  const profileTried = new Set();
+  const prefetchQueue = [];
+  let prefetchBusy = false;
+  const dwellTimers = new WeakMap();
+
+  const prefetchObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const scope = e.target;
+      if (e.intersectionRatio >= 0.6) {
+        if (!dwellTimers.has(scope)) {
+          dwellTimers.set(scope, setTimeout(() => {
+            dwellTimers.delete(scope);
+            requestPrefetch(scope);
+          }, 700));
+        }
+      } else {
+        clearTimeout(dwellTimers.get(scope));
+        dwellTimers.delete(scope);
+      }
+    }
+  }, { threshold: [0, 0.6] });
+
+  function requestPrefetch(scope) {
+    const group = scope.__igtGroup;
+    const code = group && codeFor(group);
+    const post = code && mediaByCode.get(code);
+    if (!post || post.music || post.items.every((it) => it.type === 'video')) return;
+    const user = post.username;
+    if (!user || profileTried.has(user)) return;
+    profileTried.add(user);
+    prefetchQueue.push({ user, code });
+    if (prefetchQueue.length > 5) prefetchQueue.shift();
+    runPrefetch();
+  }
+
+  async function runPrefetch() {
+    if (prefetchBusy || !prefetchQueue.length) return;
+    prefetchBusy = true;
+    const { user, code } = prefetchQueue.pop(); // the post you stopped on most recently first
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+    frame.setAttribute('aria-hidden', 'true');
+    frame.tabIndex = -1;
+    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1000px;height:900px;border:0;opacity:0;pointer-events:none';
+    frame.src = `/${encodeURIComponent(user)}/?igt_prefetch=1`;
+    document.documentElement.appendChild(frame);
+    const win = frame.contentWindow;
+    prefetchWindows.add(win);
+    const end = Date.now() + 15000;
+    while (Date.now() < end && !mediaByCode.get(code)?.music) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    await new Promise((r) => setTimeout(r, 800)); // let the rest of that profile's posts arrive
+    prefetchWindows.delete(win);
+    frame.remove();
+    setTimeout(() => {
+      prefetchBusy = false;
+      runPrefetch();
+    }, 1500);
+  }
+
+  function watchPost(group) {
+    const scope = group.closest('article');
+    if (!scope) return;
+    scope.__igtGroup = group;
+    watchHover(scope);
+    if (scope.dataset.igtWatch) return;
+    scope.dataset.igtWatch = '1';
+    prefetchObserver.observe(scope);
   }
 
   // The box that shows the post's photo (the carousel window for carousels): the highest
@@ -591,22 +718,39 @@
     const box = mediaBox(scope);
     if (!box) return;
     if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
+
+    // Volume slider (shows on hover) + play / pause button, floating on the photo.
+    const wrap = document.createElement('div');
+    wrap.className = 'ighd-music-wrap';
+    const vol = document.createElement('input');
+    vol.type = 'range';
+    vol.className = 'ighd-vol';
+    vol.min = '0';
+    vol.max = '1';
+    vol.step = '0.05';
+    vol.value = String(player.volume);
+    vol.setAttribute('aria-label', 'Music volume');
+    vol.addEventListener('input', () => setVolume(parseFloat(vol.value)));
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'ighd-music';
     b.dataset.code = code;
-    b.setAttribute('aria-label', 'Play or pause this post\'s music');
+    b.setAttribute('aria-label', "Play or pause this post's music");
     b.innerHTML = MUSIC_ICON;
-    b.title = 'Play this post\'s music';
-    b.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      toggleMusic(b, code);
-    });
-    box.appendChild(b);
+    b.title = "Play this post's music";
+    b.addEventListener('click', () => toggleMusic(b, code));
+    // Keep clicks and double-clicks (a double-click would like the post) away from the site.
+    for (const type of ['click', 'dblclick', 'mousedown', 'pointerdown', 'touchstart']) {
+      wrap.addEventListener(type, (e) => e.stopPropagation());
+    }
+    wrap.append(vol, b);
+    box.appendChild(wrap);
+
     if (playing?.code === code) playing.button = b;
     refreshMusicIcons();
     musicVisibility.observe(scope);
+    watchHover(scope);
+    if (scope.matches(':hover')) hoverPlay(scope);
   }
 
   function addDownloadButton(group) {
@@ -632,6 +776,7 @@
     for (const group of postBars()) {
       addDownloadButton(group);
       addMusicButton(group);
+      watchPost(group);
     }
   }
 
@@ -652,7 +797,7 @@
 
   const mediaByPk = new Map();
   window.addEventListener('message', (e) => {
-    if (e.source !== window || e.data?.source !== 'ighd-items' || !Array.isArray(e.data.items)) return;
+    if (!fromPage(e) || e.data?.source !== 'ighd-items' || !Array.isArray(e.data.items)) return;
     for (const it of e.data.items) {
       if (typeof it?.pk !== 'string') continue;
       const prev = mediaByPk.get(it.pk);

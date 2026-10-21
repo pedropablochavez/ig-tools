@@ -134,12 +134,21 @@
 }
 #ighd-toast.show { opacity: 1; transform: translate(-50%, 0); }
 
-/* Music button floating on top of a photo post (no background, like the mobile app) */
-.ighd-music {
+/* Music controls floating on top of a photo post (no background, like the mobile app) */
+.ighd-music-wrap {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
+  right: 10px;
+  bottom: 10px;
   z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 0 0 4px;
+  border-radius: 999px;
+  transition: background 0.15s ease;
+}
+.ighd-music-wrap:hover { background: rgba(0, 0, 0, 0.35); }
+.ighd-music {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -155,3 +164,15 @@
 }
 .ighd-music:hover { transform: scale(1.12); }
 .ighd-music svg { width: 26px; height: 26px; }
+
+/* Volume slider: hidden until the mouse is on the music controls */
+.ighd-vol {
+  width: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  accent-color: #fff;
+  transition: width 0.18s ease, opacity 0.18s ease;
+}
+.ighd-music-wrap:hover .ighd-vol,
+.ighd-vol:focus { width: 90px; opacity: 1; margin-left: 8px; }

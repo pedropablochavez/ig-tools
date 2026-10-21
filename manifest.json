@@ -1,24 +1,50 @@
 {
   "manifest_version": 3,
   "name": "IG Tools (Unofficial)",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "description": "Unofficial. View profile pictures in full size and download posts, videos and stories, and play the music of photo posts on instagram.com. Not affiliated with Meta.",
-  "permissions": ["downloads"],
-  "host_permissions": ["https://www.instagram.com/*"],
+  "permissions": [
+    "downloads",
+    "declarativeNetRequest"
+  ],
+  "host_permissions": [
+    "https://www.instagram.com/*"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "prefetch_frames",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://www.instagram.com/*"],
-      "js": ["intercept.js"],
+      "matches": [
+        "https://www.instagram.com/*"
+      ],
+      "js": [
+        "intercept.js"
+      ],
       "run_at": "document_start",
-      "world": "MAIN"
+      "world": "MAIN",
+      "all_frames": true
     },
     {
-      "matches": ["https://www.instagram.com/*"],
-      "js": ["mp4fix.js", "content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "https://www.instagram.com/*"
+      ],
+      "js": [
+        "mp4fix.js",
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle"
     }
   ],
