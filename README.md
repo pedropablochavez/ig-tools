@@ -16,14 +16,13 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
 - Full-size viewer with **Download** and **Open in new tab**. Press `Esc` or click outside to close.
 - **Download** button next to like / comment / share on posts and reels. It saves only the photo or video
   you are looking at (in a carousel, the current slide), in its original quality. If the feed only has a
-  streamed version of a video, it briefly opens the post so the site loads the full file, downloads it, and
-  takes you back.
+  streamed version of a video, it asks the site for the post's details to get the full file.
 - **Download** button in the story viewer, next to like / share (or a floating button on your own stories).
   It saves the photo or video being shown.
 - **♪ Music** on photo posts that have a song attached (as in the mobile app): like reels, the song of the
   post you are looking at plays (the exact clip the author picked, in a loop) and stops when you scroll to
   another post. A floating ♪ button on the photo pauses / resumes it, with a volume slider that shows on
-  hover (remembered). The feed does not include the song; see *How it works* for how it is found.
+  hover (remembered). The feed often lacks the song; see *How it works* for how it is found.
 - Fixes "photo + music" stories (a still image turned into a 1 fps video), which in some players stay
   black for ~10 seconds: the frame timing is adjusted so the picture shows right away. Image and audio are
   not re-encoded.
@@ -43,14 +42,13 @@ the page loads the full-size picture data the extension reads.
 ## How it works
 
 The extension does not scrape anything. Besides the photo or video you click to download, the only
-request it makes is for the music feature: the feed has no song, but the request the site makes to show a
-profile's posts does. The first time you open any profile, the extension remembers how that request looks,
-and for a photo post you stop on in your feed it repeats that same request for the post's author (exactly
-what the site does when you open their profile). Once per account and visit, one at a time.
+request it makes is for a post you stop on (or download) whose song or full video file the feed did not
+include: it asks the site for that post's details, the same request the site makes when you open the post.
+One post at a time, each only once per visit.
 
 - `intercept.js` runs in the page and reads the responses the site **already downloads for you** while you
-  browse normally, looking only for profile picture, post, story and post music URLs. It also keeps the
-  shape of the site's "profile posts" request (in the site's own local storage) to find songs.
+  browse normally, looking only for profile picture, post, story and post music URLs, and asks for a
+  post's details when the feed lacks them.
 - `content.js` shows the buttons and the viewer, using the URLs for the profile or post you are looking at.
 - `mp4fix.js` adjusts the frame timing of 1 fps "photo + music" videos before they are saved.
 - `background.js` only saves a file to your disk when you click a download button.

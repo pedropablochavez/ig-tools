@@ -164,7 +164,6 @@
     for (const obj of parseAll(text)) collect(obj, out, 0);
     publish(out);
     logSongs(out.media, req);
-    learnProfileRequest(out.media, req);
   }
 
   function logSongs(media, req) {
@@ -180,7 +179,6 @@
     collect(obj, out, 0);
     publish(out);
     logSongs(out.media, req);
-    learnProfileRequest(out.media, req);
   }
 
   function send(msg) {
@@ -201,11 +199,11 @@
     }
   }
 
-  // ---------- Songs of feed posts ----------
-  // The feed data has no song, but the request the site makes to show a profile's posts does.
-  // The first time you open any profile, we remember how that request looks (it has the
-  // username in it). For a photo post in your feed, content.js then asks us to make that same
-  // request for the post's author, exactly as the site does when you open their profile.
+  // ---------- Post details on demand ----------
+  // The feed data often lacks a post's song (and full video files). When you open a post, the
+  // site asks /api/v1/media/<id>/info/ for it, and that answer has everything. content.js asks
+  // us to make that same request for a post you stop on; the numeric id comes from the post's
+  // code in its link (base64 digits).
 
   // Step-by-step log of the song feature, shown by igtSongStatus() in the browser console.
   const songLog = [];
@@ -215,79 +213,24 @@
   }
   const shortUrl = (u) => String(u || '').split('?')[0].replace(/^https:\/\/www\.instagram\.com/, '');
 
-  const TEMPLATE_KEY = 'igt-profile-request';
-  const USER_CHARS = 'A-Za-z0-9._';
-  const userRe = (u, flags) => new RegExp(
-    `(^|[^${USER_CHARS}])${u.replace(/\./g, '\\.')}(?=[^${USER_CHARS}]|$)`, flags
-  );
-  const latestTokens = {}; // fb_dtsg / lsd / jazoest from the site's latest requests
-
-  let template = null;
-  try { template = JSON.parse(localStorage.getItem(TEMPLATE_KEY)); } catch (_) {}
-
-  function noteTokens(body) {
-    if (typeof body !== 'string' || !body.includes('=')) return;
-    try {
-      const params = new URLSearchParams(body);
-      for (const k of ['fb_dtsg', 'lsd', 'jazoest']) if (params.get(k)) latestTokens[k] = params.get(k);
-    } catch (_) {}
+  const CODE_DIGITS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  function codeToId(code) {
+    let n = 0n;
+    for (const c of code.slice(0, 11)) {
+      const d = CODE_DIGITS.indexOf(c);
+      if (d < 0) return null;
+      n = n * 64n + BigInt(d);
+    }
+    return n.toString();
   }
 
-  const isForm = (body) => typeof body === 'string' && /^[^{\[]*=/.test(body);
-  const safeDecode = (x) => { try { return decodeURIComponent(x); } catch (_) { return x; } };
-
-  // Readable text of a request (form values and URL decoded), to look for a username in it.
-  function requestText(req) {
-    let body = req.body || '';
-    if (isForm(body)) {
-      try { body = [...new URLSearchParams(body).values()].join(' '); } catch (_) {}
-    }
-    return `${safeDecode(req.url)} ${body}`;
-  }
-
-  // Same request with another username: replaced inside the URL path, the query values and
-  // the form values (decoded), so encoded JSON like variables={"username":"..."} works too.
-  function swapUser(req, from, to) {
-    const re = userRe(from, 'gi');
-    const rep = (x) => x.replace(re, `$1${to}`);
-    const url = new URL(req.url, location.href);
-    url.pathname = url.pathname.split('/').map((seg) => rep(safeDecode(seg))).join('/');
-    for (const [k, v] of [...url.searchParams]) url.searchParams.set(k, rep(v));
-    let body = req.body;
-    if (isForm(body)) {
-      const params = new URLSearchParams(body);
-      for (const [k, v] of [...params]) params.set(k, rep(v));
-      for (const [k, v] of Object.entries(latestTokens)) if (params.has(k)) params.set(k, v);
-      body = params.toString();
-    } else if (typeof body === 'string') {
-      body = rep(body);
-    }
-    return { url: url.href, body };
-  }
-
-  function learnProfileRequest(media, req) {
-    if (!req || !media.length) return;
-    const text = requestText(req);
-    if (!media.some((p) => p.music)) return;
-    // Only first pages: a request with a cursor would not work for another account.
-    if (/max_id=|"after":"|%22after%22%3A%22/.test(text)) {
-      slog(`not learned (next page of results): ${shortUrl(req.url)}`);
-      return;
-    }
-    for (const post of media) {
-      const u = post.music && post.username;
-      if (!u) continue;
-      if (!userRe(u, 'i').test(text)) {
-        slog(`not learned (username @${u} not in the request): ${req.method} ${shortUrl(req.url)}`);
-        continue;
-      }
-      slog(`learned profile request from @${u}: ${req.method} ${shortUrl(req.url)}`);
-      const fresh = !template;
-      template = { method: req.method, url: req.url, body: req.body, headers: req.headers, user: u };
-      try { localStorage.setItem(TEMPLATE_KEY, JSON.stringify(template)); } catch (_) {}
-      if (fresh) send({ source: 'ighd-template-ready' });
-      return;
-    }
+  // Headers the site sends with its own /api/v1/ requests (app id, CSRF token, ...).
+  let apiHeaders = null;
+  function noteApiHeaders(url, headers) {
+    if (!/\/api\/v1\//.test(url) || !headers) return;
+    const h = {};
+    for (const [k, v] of Object.entries(headers)) if (/^x-/i.test(k)) h[k.toLowerCase()] = v;
+    if (h['x-ig-app-id']) apiHeaders = h;
   }
 
   function cookie(name) {
@@ -295,40 +238,30 @@
     return m ? decodeURIComponent(m[1]) : '';
   }
 
-  async function loadProfileSongs(user) {
-    if (!template) {
-      slog(`asked for @${user}: nothing learned yet (open any profile once)`);
-      return { ok: false, reason: 'no-template' };
-    }
-    let url;
-    let body;
+  async function loadPostDetails(code) {
+    const id = codeToId(code);
+    if (!id) return { ok: false, reason: 'bad code' };
+    const url = `${location.origin}/api/v1/media/${id}/info/`;
+    let claim = '0';
+    try { claim = sessionStorage.getItem('www-claim-v2') || '0'; } catch (_) {}
+    const headers = {
+      'x-ig-app-id': '936619743392459',
+      'x-requested-with': 'XMLHttpRequest',
+      'x-ig-www-claim': claim,
+      ...(apiHeaders || {}),
+      'x-csrftoken': cookie('csrftoken')
+    };
     try {
-      ({ url, body } = swapUser(template, template.user, user));
-    } catch (e) {
-      return { ok: false, reason: e.message };
-    }
-    const headers = { ...(template.headers || {}) };
-    for (const k of Object.keys(headers)) {
-      const lk = k.toLowerCase();
-      if (lk === 'x-csrftoken' && cookie('csrftoken')) headers[k] = cookie('csrftoken');
-      if (lk === 'x-fb-lsd' && latestTokens.lsd) headers[k] = latestTokens.lsd;
-    }
-    try {
-      const res = await origFetch(url, {
-        method: template.method || 'GET',
-        headers,
-        body: template.method === 'GET' ? undefined : body,
-        credentials: 'include'
-      });
+      const res = await origFetch(url, { headers, credentials: 'include' });
       const text = await res.text();
       const before = songLog.length;
-      handleText(text, null);
+      handleText(text, { method: 'GET', url, body: null, headers });
       const found = songLog.length > before;
-      slog(`asked for @${user}: HTTP ${res.status}, ${found ? 'songs found' : 'no songs in the answer'}` +
+      slog(`post ${code}: HTTP ${res.status}, ${found ? 'song found' : 'no song'}` +
         (res.ok ? '' : ` (${text.slice(0, 120).replace(/\s+/g, ' ')})`));
       return { ok: res.ok, status: res.status };
     } catch (e) {
-      slog(`asked for @${user}: failed (${e.message})`);
+      slog(`post ${code}: failed (${e.message})`);
       return { ok: false, reason: e.message };
     }
   }
@@ -369,7 +302,7 @@
           body: bodyText(init.body),
           headers: plainHeaders(init.headers || (a instanceof Request ? a.headers : null))
         };
-        noteTokens(req.body);
+        noteApiHeaders(url, req.headers);
       }
     } catch (_) {}
     const res = await origFetch.apply(this, args);
@@ -401,7 +334,7 @@
   XMLHttpRequest.prototype.send = function (body) {
     if (this.__igt) {
       this.__igt.body = bodyText(body);
-      noteTokens(this.__igt.body);
+      noteApiHeaders(this.__igt.url, this.__igt.headers);
     }
     return origSend.call(this, body);
   };
@@ -418,15 +351,15 @@
       });
     } else if (e.data?.source === 'ighd-log' && typeof e.data.text === 'string') {
       slog(e.data.text);
-    } else if (e.data?.source === 'ighd-load-songs' && typeof e.data.user === 'string') {
-      const result = await loadProfileSongs(e.data.user);
-      send({ source: 'ighd-load-songs-result', user: e.data.user, ...result });
+    } else if (e.data?.source === 'ighd-load-post' && typeof e.data.code === 'string') {
+      const result = await loadPostDetails(e.data.code);
+      send({ source: 'ighd-load-post-result', code: e.data.code, ...result });
     }
   });
 
   // Diagnostic for the browser console.
   window.igtSongStatus = () => {
-    console.log(`learned: ${!!template}${template ? ` (${template.method} ${shortUrl(template.url)}, from @${template.user})` : ''}`);
+    console.log(`site API headers seen: ${!!apiHeaders}`);
     console.log(songLog.join('\n') || '(no events yet)');
     return songLog.length;
   };

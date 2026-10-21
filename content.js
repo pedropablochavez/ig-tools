@@ -432,7 +432,13 @@
       toast('Could not identify this post.');
       return;
     }
-    const post = mediaByCode.get(code);
+    let post = mediaByCode.get(code);
+    if (!post) {
+      // The feed had no data for this post: ask the site for its details.
+      detailsTried.add(code);
+      await loadPostDetails(code);
+      post = mediaByCode.get(code);
+    }
     if (!post) {
       toast('Media not loaded yet. Open the post or scroll it into view, then try again.');
       return;
@@ -446,6 +452,12 @@
 
     // In the feed, videos often come only as a stream. Opening the post makes the site load
     // the full .mp4 file; we pick it up, download it and go back to where you were.
+    if (!ready(item, sel.showsVideo)) {
+      toast('Loading the full video…');
+      detailsTried.add(code);
+      await loadPostDetails(code);
+      item = await waitForItem(code, sel.index, sel.showsVideo, 2000) || item;
+    }
     if (!ready(item, sel.showsVideo) && !location.pathname.includes(code)) {
       const link = permalinkFor(group, code);
       if (link) {
@@ -628,17 +640,21 @@
   }
 
   // ---------- Finding the song of feed posts ----------
-  // The feed data has no song, but the request the site makes to show a profile's posts does.
-  // intercept.js learns that request the first time you open any profile and can repeat it for
-  // the author of a photo post you stop on: the same request the site makes when you open their
-  // profile. One account at a time, each only once per visit.
+  // The feed data often has no song for a post. When you stop on a photo post (or point at it),
+  // intercept.js asks the site for that post's details, the same request the site makes when you
+  // open the post; the answer includes the song. One post at a time, each only once per visit.
 
-  const profileTried = new Set();
-  const prefetchQueue = [];
-  let prefetchBusy = false;
-  let needsTemplate = false;
-  let toldAboutTemplate = false;
+  const detailsTried = new Set();
+  const detailsQueue = [];
+  let detailsBusy = false;
   const dwellTimers = new WeakMap();
+
+  const logged = new Set();
+  function songLog(text) {
+    if (logged.has(text)) return;
+    logged.add(text);
+    window.postMessage({ source: 'ighd-log', text: `feed: ${text}` }, location.origin);
+  }
 
   const prefetchObserver = new IntersectionObserver((entries) => {
     for (const e of entries) {
@@ -648,7 +664,7 @@
           dwellTimers.set(scope, setTimeout(() => {
             dwellTimers.delete(scope);
             requestPrefetch(scope);
-          }, 500));
+          }, 400));
         }
       } else {
         clearTimeout(dwellTimers.get(scope));
@@ -657,81 +673,52 @@
     }
   }, { threshold: [0, 0.6] });
 
-  const logged = new Set();
-  function songLog(text) {
-    if (logged.has(text)) return;
-    logged.add(text);
-    window.postMessage({ source: 'ighd-log', text: `feed: ${text}` }, location.origin);
+  // Asks the site for a post's full details (song, full video files). Resolves when answered.
+  const detailsWaiters = new Map();
+  window.addEventListener('message', (e) => {
+    if (!fromPage(e) || e.data?.source !== 'ighd-load-post-result') return;
+    const waiters = detailsWaiters.get(e.data.code) || [];
+    detailsWaiters.delete(e.data.code);
+    for (const w of waiters) w(e.data);
+  });
+  function loadPostDetails(code) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ ok: false, reason: 'timeout' }), 10000);
+      const list = detailsWaiters.get(code) || [];
+      list.push((r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+      detailsWaiters.set(code, list);
+      if (list.length === 1) window.postMessage({ source: 'ighd-load-post', code }, location.origin);
+    });
   }
 
   function requestPrefetch(scope) {
     const group = scope.__igtGroup;
     const code = group && codeFor(group);
-    const post = code && mediaByCode.get(code);
     if (!code) return songLog('a post without a link to identify it');
-    if (!post) return songLog(`post ${code}: no data for it yet`);
-    if (post.music || post.items.every((it) => it.type === 'video')) return;
-    const user = post.username;
-    if (!user) return songLog(`post ${code}: author unknown in the data`);
-    if (profileTried.has(user)) return;
-    if (needsTemplate) {
-      if (!toldAboutTemplate) {
-        toldAboutTemplate = true;
-        toast('To find songs in the feed, open any profile once. IG Tools will remember how.');
-      }
-      return;
-    }
-    profileTried.add(user);
-    songLog(`post ${code}: asking for @${user}'s songs`);
-    prefetchQueue.push(user);
-    if (prefetchQueue.length > 5) prefetchQueue.shift();
+    const post = mediaByCode.get(code);
+    if (post?.music) return;
+    if (post && post.items.every((it) => it.type === 'video')) return; // has its own sound
+    if (!post && scope.querySelector('video')) return; // a reel or video: has its own sound
+    if (detailsTried.has(code)) return;
+    detailsTried.add(code);
+    songLog(`post ${code}: asking for its details`);
+    detailsQueue.push(code);
+    if (detailsQueue.length > 5) detailsQueue.shift();
     runPrefetch();
   }
 
-  function loadSongs(user) {
-    return new Promise((resolve) => {
-      const done = (e) => {
-        if (!fromPage(e) || e.data?.source !== 'ighd-load-songs-result' || e.data.user !== user) return;
-        window.removeEventListener('message', done);
-        clearTimeout(timer);
-        resolve(e.data);
-      };
-      const timer = setTimeout(() => {
-        window.removeEventListener('message', done);
-        resolve({ ok: false, reason: 'timeout' });
-      }, 10000);
-      window.addEventListener('message', done);
-      window.postMessage({ source: 'ighd-load-songs', user }, location.origin);
-    });
-  }
-
   async function runPrefetch() {
-    if (prefetchBusy || !prefetchQueue.length) return;
-    prefetchBusy = true;
-    const user = prefetchQueue.pop(); // the post you stopped on most recently first
-    const result = await loadSongs(user);
-    if (result.reason === 'no-template') {
-      needsTemplate = true;
-      profileTried.delete(user);
-      prefetchQueue.length = 0;
-      prefetchBusy = false;
-      return;
-    }
+    if (detailsBusy || !detailsQueue.length) return;
+    detailsBusy = true;
+    await loadPostDetails(detailsQueue.pop()); // the post you stopped on most recently first
     setTimeout(() => {
-      prefetchBusy = false;
+      detailsBusy = false;
       runPrefetch();
-    }, 1200);
+    }, 800);
   }
-
-  // intercept.js just learned the request (you opened a profile): retry the posts on screen.
-  window.addEventListener('message', (e) => {
-    if (!fromPage(e) || e.data?.source !== 'ighd-template-ready') return;
-    needsTemplate = false;
-    for (const scope of document.querySelectorAll('article[data-igt-watch]')) {
-      const r = scope.getBoundingClientRect();
-      if (r.bottom > 0 && r.top < innerHeight) requestPrefetch(scope);
-    }
-  });
 
   function watchPost(group) {
     const scope = group.closest('article');
