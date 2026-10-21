@@ -16,6 +16,36 @@
     return versions.reduce((a, b) => ((b?.width || 0) > (a?.width || 0) ? b : a))?.url || null;
   }
 
+  function biggest(list) {
+    if (!Array.isArray(list) || !list.length) return null;
+    const area = (x) => (x?.width || x?.config_width || 0) * (x?.height || x?.config_height || 0);
+    return list.reduce((a, b) => (area(b) > area(a) ? b : a));
+  }
+
+  // One photo or video of a post, at the largest size available.
+  function mediaItem(n) {
+    if (!n || typeof n !== 'object') return null;
+    const video = biggest(n.video_versions)?.url || n.video_url;
+    if (video && validUrl(video)) return { type: 'video', url: video };
+    if (n.media_type === 2 || n.is_video) return { type: 'video', url: null };
+    const image = biggest(n.image_versions2?.candidates)?.url
+      || biggest(n.display_resources)?.src
+      || n.display_url;
+    if (image && validUrl(image)) return { type: 'image', url: image };
+    return null;
+  }
+
+  function toPost(node) {
+    const code = node.code || node.shortcode;
+    const children = node.carousel_media || node.edge_sidecar_to_children?.edges?.map((e) => e.node);
+    const items = (Array.isArray(children) && children.length ? children : [node])
+      .map(mediaItem)
+      .filter(Boolean);
+    if (!items.length) return null;
+    const username = (node.user?.username || node.owner?.username || '').toLowerCase();
+    return { code, username, items };
+  }
+
   function collect(node, out, depth) {
     if (!node || typeof node !== 'object' || depth > 80) return;
     if (Array.isArray(node)) {
@@ -27,8 +57,13 @@
       const std = node.profile_pic_url_hd || node.profile_pic_url;
       const url = hd || std;
       if (url && validUrl(url)) {
-        out.push({ username: node.username.toLowerCase(), url, hd: !!hd });
+        out.pics.push({ username: node.username.toLowerCase(), url, hd: !!hd });
       }
+    }
+    const code = node.code || node.shortcode;
+    if (typeof code === 'string' && /^[A-Za-z0-9_-]{5,}$/.test(code)) {
+      const post = toPost(node);
+      if (post) out.media.push(post);
     }
     for (const k in node) {
       const v = node[k];
@@ -55,23 +90,24 @@
   function handleText(text) {
     if (typeof text !== 'string') return;
     stats.responses++;
-    if (!text.includes('profile_pic_url')) return;
+    if (!/profile_pic_url|image_versions2|video_versions|display_url/.test(text)) return;
     stats.withPics++;
-    const out = [];
+    const out = { pics: [], media: [] };
     for (const obj of parseAll(text)) collect(obj, out, 0);
     publish(out);
   }
 
   function handleObject(obj) {
     stats.responses++;
-    const out = [];
+    const out = { pics: [], media: [] };
     collect(obj, out, 0);
     publish(out);
   }
 
-  function publish(pics) {
+  function publish({ pics, media }) {
     for (const p of pics) stats.users.add(p.username);
     if (pics.length) window.postMessage({ source: 'ighd-pics', pics }, location.origin);
+    if (media.length) window.postMessage({ source: 'ighd-media', media }, location.origin);
   }
 
   // Data embedded in the HTML on page load.

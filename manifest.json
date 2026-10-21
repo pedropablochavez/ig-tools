@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "HD Profile Picture Viewer",
-  "version": "1.2.0",
-  "description": "Unofficial. Adds a button to view and save the profile picture of the profile you are viewing on instagram.com in full size.",
+  "version": "1.3.0",
+  "description": "Unofficial. View profile pictures in full size and download post photos and videos on instagram.com.",
   "permissions": ["downloads"],
   "host_permissions": ["https://www.instagram.com/*"],
   "background": {

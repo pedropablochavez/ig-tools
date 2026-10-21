@@ -193,6 +193,133 @@
     });
   }
 
+  // ---------- Post / video download ----------
+  // Media URLs also come from intercept.js: only what the page already loaded for you.
+
+  const mediaByCode = new Map();
+  window.addEventListener('message', (e) => {
+    if (e.source !== window || e.data?.source !== 'ighd-media' || !Array.isArray(e.data.media)) return;
+    for (const m of e.data.media) {
+      if (typeof m?.code !== 'string' || !Array.isArray(m.items)) continue;
+      const usable = (p) => p.items.filter((i) => i?.url).length;
+      const prev = mediaByCode.get(m.code);
+      if (!prev || usable(m) >= usable(prev)) mediaByCode.set(m.code, m);
+    }
+  });
+
+  const POST_PATH = /\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,})/;
+  // aria-label of the "like" icon in the most common interface languages.
+  const LIKE_LABEL = /^(like|unlike|me gusta|ya no me gusta|curtir|descurtir|j[’']aime|je n[’']aime plus|gefällt mir|gefällt mir nicht mehr|mi piace|non mi piace più)$/i;
+
+  function codeFor(group) {
+    const scope = group.closest('article') || group.closest('[role="dialog"]');
+    if (scope) {
+      for (const a of scope.querySelectorAll('a[href]')) {
+        const m = a.getAttribute('href').match(POST_PATH);
+        if (m) return m[1];
+      }
+    }
+    const m = location.pathname.match(POST_PATH);
+    return m ? m[1] : null;
+  }
+
+  function extFrom(url, type) {
+    try {
+      const m = new URL(url).pathname.match(/\.(jpe?g|png|webp|heic|mp4|mov)$/i);
+      if (m) return m[1].toLowerCase();
+    } catch (_) {}
+    return type === 'video' ? 'mp4' : 'jpg';
+  }
+
+  let toastTimer = null;
+  function toast(text) {
+    let el = document.getElementById('ighd-toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'ighd-toast';
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+  }
+
+  function download(url, filename) {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'download', url, filename }, (resp) => resolve(!!resp?.ok));
+    });
+  }
+
+  async function downloadPost(group) {
+    const code = codeFor(group);
+    const post = code && mediaByCode.get(code);
+    if (!post) {
+      toast('Media not loaded yet. Open the post or scroll it into view, then try again.');
+      return;
+    }
+    const items = post.items.filter((i) => i.url);
+    if (!items.length) {
+      toast('This video is only available as a stream and cannot be downloaded.');
+      return;
+    }
+    const base = `${post.username || 'post'}_${code}`;
+    let ok = 0;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const suffix = items.length > 1 ? `_${i + 1}` : '';
+      if (await download(it.url, `${base}${suffix}.${extFrom(it.url, it.type)}`)) ok++;
+    }
+    const skipped = post.items.length - items.length;
+    toast(
+      `Downloaded ${ok} of ${items.length} file${items.length > 1 ? 's' : ''}` +
+      (skipped ? ` (${skipped} stream-only video${skipped > 1 ? 's' : ''} skipped)` : '')
+    );
+  }
+
+  const DL_ICON = `
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+      <path d="M12 3v12m0 0l-5-5m5 5l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+
+  // Finds each like / comment / share row and adds a download button at its end.
+  function addPostButtons() {
+    for (const svg of document.querySelectorAll('svg[aria-label]')) {
+      if (!LIKE_LABEL.test(svg.getAttribute('aria-label').trim())) continue;
+      let group = svg.parentElement;
+      for (let i = 0; i < 8 && group; i++) {
+        if (group.querySelectorAll('svg[aria-label]').length >= 3) break;
+        group = group.parentElement;
+      }
+      if (!group || group.dataset.ighdDl || group.querySelector('.ighd-dlpost')) continue;
+      group.dataset.ighdDl = '1';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ighd-dlpost';
+      b.title = 'Download photo / video';
+      b.setAttribute('aria-label', 'Download photo or video');
+      b.innerHTML = DL_ICON;
+      b.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        downloadPost(group);
+      });
+      group.appendChild(b);
+    }
+  }
+
+  let scanQueued = false;
+  new MutationObserver(() => {
+    if (scanQueued) return;
+    scanQueued = true;
+    setTimeout(() => {
+      scanQueued = false;
+      addPostButtons();
+    }, 400);
+  }).observe(document.body, { childList: true, subtree: true });
+  addPostButtons();
+
   // The site is a single-page app: watch URL changes to show/hide the button.
   let lastPath = null;
   function sync() {
