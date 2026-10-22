@@ -53,6 +53,17 @@
     }
   });
 
+  // Whether each user follows you, from the profile data the site already loaded.
+  const friendships = new Map();
+  window.addEventListener('message', (e) => {
+    if (!fromPage(e) || e.data?.source !== 'ighd-friendship' || !Array.isArray(e.data.friendships)) return;
+    for (const f of e.data.friendships) {
+      if (typeof f?.username !== 'string' || typeof f.followedBy !== 'boolean') continue;
+      remember(friendships, f.username, { followedBy: f.followedBy, pk: String(f.pk || '') });
+    }
+    updateFollowBadge();
+  });
+
   function interceptDiag(key) {
     if (!interceptStats) return 'interceptor inactive: reload the page (F5)';
     const s = interceptStats;
@@ -1340,6 +1351,40 @@
     return document.querySelector('dialog[open]') || document.body;
   }
 
+  // ---------- "Follows you" label ----------
+
+  const followBadge = document.createElement('span');
+  followBadge.className = 'ighd-follow-badge';
+
+  function viewerId() {
+    const m = document.cookie.match(/(?:^|;\s*)ds_user_id=(\d+)/);
+    return m ? m[1] : '';
+  }
+
+  // Next to the username at the top of a profile. Nothing is shown on your own profile or
+  // when the page has not provided the relationship.
+  function updateFollowBadge() {
+    const user = getUsername()?.toLowerCase();
+    const info = user && friendships.get(user);
+    const own = info && info.pk && info.pk === viewerId();
+    const named = (el) => el.textContent.trim().toLowerCase() === user
+      || [...el.querySelectorAll('span')].some((s) => s.textContent.trim().toLowerCase() === user);
+    const heading = info && !own
+      && [...document.querySelectorAll('main header h1, main header h2')].find(named);
+    if (!heading) { followBadge.remove(); return; }
+    // Step out of single-child wrappers (link, row) so the label sits beside the name.
+    let anchor = heading;
+    for (let i = 0; i < 4; i++) {
+      const parent = anchor.parentElement;
+      if (!parent || parent.tagName === 'HEADER' || parent.children.length !== 1) break;
+      anchor = parent;
+    }
+    const text = info.followedBy ? 'Follows you' : "Doesn't follow you";
+    if (followBadge.textContent !== text) followBadge.textContent = text;
+    followBadge.dataset.follows = String(info.followedBy);
+    if (anchor.nextSibling !== followBadge) anchor.after(followBadge);
+  }
+
   // The site is a single-page app: watch URL changes to show/hide the buttons.
   let lastPath = null;
   function sync() {
@@ -1351,6 +1396,7 @@
     } else if (storyBtn.isConnected) {
       storyBtn.remove();
     }
+    updateFollowBadge();
     if (location.pathname === lastPath && (btn.isConnected || !getUsername())) return;
     lastPath = location.pathname;
     if (getUsername()) {

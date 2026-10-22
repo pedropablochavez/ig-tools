@@ -23,6 +23,9 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
   below the username and above recommendation / location subtitles. Works with photos and videos
   when the page supplies audio metadata, even without a separate playable song URL. Existing native
   audio links are kept without adding a duplicate. Long credits are truncated; hover for the full text.
+- **Follows you / Doesn't follow you** label next to the username on other people's profiles. It uses
+  the relationship the profile page already loaded, so it adds no requests. Nothing is shown on your
+  own profile or when the page has not provided the relationship.
 - **♪ Music** on photo posts that have a song attached (as in the mobile app): like reels, the song of the
   post you are looking at plays (the exact clip the author picked, in a loop). It keeps playing as you
   scroll while its photo remains visible and dominant, then switches when the next post fills about
@@ -71,9 +74,9 @@ without affecting the website's original response.
 
 - `intercept.js` runs in the page and reads the responses the site **already downloads for you** while you
   browse normally, looking only for profile picture, post, story and post music URLs, and asks for a
-  post's details when the feed lacks them. It also reads song / original audio credits from those same
-  responses; displaying credits does not make additional requests.
-- `content.js` shows the buttons, audio credits and the viewer, using the data for the profile or post
+  post's details when the feed lacks them. It also reads song / original audio credits and whether a
+  user follows you from those same responses; displaying them does not make additional requests.
+- `content.js` shows the buttons, audio credits, the follows-you label and the viewer, using the data for the profile or post
   you are looking at.
 - `music-player.js` first uses page audio, then switches to an extension-owned player if the page
   returns `NotAllowedError`. It keeps the same volume, clip position and play / pause controls.
@@ -93,7 +96,7 @@ larger size.
 
 ## Website and store distribution
 
-Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.3.3.zip` and
+Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.4.0.zip` and
 `dist/site/`. The package contains only extension runtime assets, the license and privacy policy.
 The GitHub Pages workflow builds this same ZIP and deploys the static site on main pushes. The
 website has no analytics, third-party fonts or scripts, and no backend. GitHub serves the public site

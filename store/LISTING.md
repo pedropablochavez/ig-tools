@@ -10,7 +10,7 @@ Status: prepared for the owner's first submission; **not published or approved**
 - Homepage: https://pedropablochavez.github.io/ig-tools/
 - Privacy policy: https://pedropablochavez.github.io/ig-tools/privacy.html
 - Support: https://github.com/pedropablochavez/ig-tools/issues
-- Package: build with `python scripts/build_distribution.py`; upload `dist/ig-tools-v2.3.3.zip`
+- Package: build with `python scripts/build_distribution.py`; upload `dist/ig-tools-v2.4.0.zip`
 - Short description: use the current manifest description (119 characters, within the 132 limit).
 
 ## Detailed description
@@ -24,6 +24,7 @@ IG Tools (Unofficial) adds practical media controls to the desktop website:
 • Save the current story with a dedicated download button.
 • Hear music attached to photo posts automatically, using the clip selected by the author.
 • See song titles, artists and original audio credits when the page provides them.
+• See whether a profile you visit follows you, from the profile data the page already loaded.
 • Pause or resume music, adjust volume and let playback follow the visible post.
 
 Playback stops when the post leaves view, another post takes over or the tab is hidden. A bundled
@@ -54,7 +55,7 @@ access in their own desktop browser session.
 ### Host: https://www.instagram.com/*
 
 Run bundled content scripts on the supported website to read already-loaded media metadata, display
-full-size profile pictures and audio credits, attach user-initiated download controls and select the
+full-size profile pictures, audio credits and whether a visited profile follows the user, attach user-initiated download controls and select the
 visible post for playback. Missing media details are requested from the site's same-origin single-post
 endpoint. No other website access is requested.
 

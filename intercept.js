@@ -1,6 +1,7 @@
 // Runs inside the page itself (world: MAIN) from the very start.
 // It passively reads the responses the site already downloads on its own while you browse
-// and picks out media / audio data. Its only own request is a queued post-detail lookup.
+// and picks out media / audio data and whether each user follows you. Its only own request
+// is a queued post-detail lookup.
 // Temporary data goes only to content.js, in the same tab.
 (() => {
   'use strict';
@@ -182,6 +183,15 @@
       if (url && validUrl(url)) {
         out.pics.push({ username: node.username.toLowerCase(), url, hd: !!hd });
       }
+      // Whether this user follows you. Partial copies of friendship_status omit followed_by.
+      const followedBy = node.friendship_status?.followed_by;
+      if (typeof followedBy === 'boolean') {
+        out.friendships.push({
+          username: node.username.toLowerCase(),
+          pk: String(node.pk ?? node.id ?? ''),
+          followedBy
+        });
+      }
     }
     const code = node.code || node.shortcode;
     if (typeof code === 'string' && /^[A-Za-z0-9_-]{5,}$/.test(code)) {
@@ -228,9 +238,9 @@
   function handleText(text, req) {
     if (typeof text !== 'string' || text.length > MAX_RESPONSE_BYTES) return false;
     stats.responses++;
-    if (!/profile_pic_url|image_versions2|video_versions|display_url|music|audio/.test(text)) return;
+    if (!/profile_pic_url|image_versions2|video_versions|display_url|music|audio|followed_by/.test(text)) return;
     stats.withPics++;
-    const out = { pics: [], media: [], items: [] };
+    const out = { pics: [], media: [], items: [], friendships: [] };
     const budget = { left: 20000 };
     for (const obj of parseAll(text)) { if (budget.left <= 0) break; collect(obj, out, 0, budget); }
     publish(out);
@@ -247,7 +257,7 @@
 
   function handleObject(obj, req) {
     stats.responses++;
-    const out = { pics: [], media: [], items: [] };
+    const out = { pics: [], media: [], items: [], friendships: [] };
     collect(obj, out, 0);
     publish(out);
     logSongs(out.media, req);
@@ -257,11 +267,12 @@
     window.postMessage(msg, location.origin);
   }
 
-  function publish({ pics, media, items }) {
+  function publish({ pics, media, items, friendships }) {
     for (const p of pics) remember(stats.users, p.username, null, 1000);
     if (pics.length) send({ source: 'ighd-pics', pics });
     if (media.length) send({ source: 'ighd-media', media });
     if (items.length) send({ source: 'ighd-items', items });
+    if (friendships.length) send({ source: 'ighd-friendship', friendships });
   }
 
   // Data embedded in the HTML on page load.

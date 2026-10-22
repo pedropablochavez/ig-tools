@@ -11,6 +11,9 @@
   data is sent to the extension author or third-party services.
 - **Audio credits.** Song titles, artists and original audio creators supplied by the page are displayed
   in post headers. These credits stay in the current tab; displaying them adds no requests or storage.
+- **Follows-you label.** On another person's profile, the extension shows whether that account follows
+  you, using the relationship the profile page already loaded. It makes no extra request, and this
+  status is kept only in memory in the current tab (up to 500 recent profiles).
 - **Internal audio player.** If a page requires a first click before playing sound, the extension may
   pass the selected audio URL, clip timing and volume to its own packaged offscreen document. Audio
   still loads directly from the site's media servers; no third-party service or embedded site is used.

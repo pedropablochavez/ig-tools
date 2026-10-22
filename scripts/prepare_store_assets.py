@@ -57,7 +57,7 @@ def main():
       removeAttribute(k){if(k==='src')this.src=''} load(){this.currentTime=0}
     }
     window.Audio=DemoAudio;
-    window.chrome={runtime:{getManifest:()=>({version:'2.3.3'}),sendMessage:(_m,fn)=>fn?.({ok:true})}};
+    window.chrome={runtime:{getManifest:()=>({version:'2.4.0'}),sendMessage:(_m,fn)=>fn?.({ok:true})}};
     const nativePost=window.postMessage;window.postMessage=m=>nativePost.call(window,m,'*');
     """
     style = """body{margin:0;background:#f4f6f0;color:#173c34;font-family:Arial,sans-serif}

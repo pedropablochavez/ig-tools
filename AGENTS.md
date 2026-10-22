@@ -19,7 +19,7 @@ docs are in English. Load it via `brave://extensions` → Developer mode → Loa
 
 | File | World | Role |
 | --- | --- | --- |
-| `intercept.js` | MAIN, `document_start` | Hooks `fetch` / `XMLHttpRequest`, parses JSON responses and embedded `<script type="application/json">`, extracts profile pics, post media (`code` → items), story items (`pk`), and post music. Sends them with `window.postMessage` (`ighd-pics`, `ighd-media`, `ighd-items`). Handles `ighd-load-post` → fetches `/api/v1/media/<id>/info/` (id = post code decoded as base64 digits, `codeToId`). Console helpers: `igtSongStatus()`, `igtMusicFields()`. |
+| `intercept.js` | MAIN, `document_start` | Hooks `fetch` / `XMLHttpRequest`, parses JSON responses and embedded `<script type="application/json">`, extracts profile pics, post media (`code` → items), story items (`pk`), and post music. Sends them with `window.postMessage` (`ighd-pics`, `ighd-media`, `ighd-items`, `ighd-friendship`). Handles `ighd-load-post` → fetches `/api/v1/media/<id>/info/` (id = post code decoded as base64 digits, `codeToId`). Console helpers: `igtSongStatus()`, `igtMusicFields()`. |
 | `content.js` | isolated | UI: profile HD viewer, download button in each post's like/comment/share bar (`postBars()`), story download button, ♪ music overlay + volume slider, reels-like autoplay (`updateFocusPlay`). Carousel slide detection via real visibility (`visibleArea`, `selection`). |
 | `mp4fix.js` | isolated | Rewrites `stts` of ~1 fps "photo + music" story videos so Windows decoders show the picture immediately (no re-encode). |
 | `background.js` | SW | `chrome.downloads.download` (accepts data: URLs from `downloadMedia`). |
@@ -39,6 +39,27 @@ Messages between worlds are checked with `fromPage(e)` (same window + same origi
 - Post bar detection must require the big (24px) like icon + comment icon; comments have 12px hearts.
 - Logged-out testing is limited (login wall hides carousels, no music fields). Ask the owner for
   console output (`igtSongStatus()`) or to connect a browser tool if you need the logged-in view.
+
+## Follows-you label (v2.4.0)
+
+Owner asked for "(te sigue)" / "(no te sigue)" next to the name on profiles; UI text is English
+("Follows you" / "Doesn't follow you"). Verified on 2026-10-22 in the owner's logged-in Brave with a
+temporary page probe (read-only copies of responses): the profile query (`POST /api/graphql`,
+`data.user`) carries `friendship_status.followed_by` for SPA navigation and after a full reload (then
+it arrives by XHR, not embedded JSON). A follower showed `true`, a non-follower `false`. Feed copies of
+the same user carry a partial `friendship_status` without `followed_by`; only booleans are used. The
+owner's own profile has no `friendship_status`. Followers / following dialog entries have none either.
+
+`collect` publishes `{ username, pk, followedBy }` as `ighd-friendship`; content keeps a 500-entry map.
+`updateFollowBadge` runs from `sync` (600 ms, visible tab) and on data arrival. It finds the `h1` / `h2`
+in `main header` whose text is the route username, leaves single-child wrappers (link, row) and places
+one reused label before the Options button. Nothing on the own profile (pk = `ds_user_id` cookie) or
+without data. No new requests, permissions or storage. Do not call `/friendships/show/` as a fallback.
+
+Validation: 7 new tests (`tests/follow-badge.test.js`: extraction, partial data, placement, no
+duplicates, own / unknown profiles, profile changes) plus the 70 existing pass. The placement was
+previewed by injecting the label into the real header. After reloading the extension, the owner
+confirmed it works in their real Brave session ("Lo comprobé y funciona bien").
 
 ## Installation website redesign (2026-10-22)
 
@@ -251,4 +272,4 @@ and the audio engine / error. The owner requires playback without changing site 
 - `node --test tests/music-autoplay.test.js` runs the shipped music controller in a `vm` with stubbed
   media and DOM events, covering blocked playback, gesture recovery, focus changes and cancellation.
 - Real UI checks need the owner's logged-in browser.
-- Full suite: `node --test tests/music-autoplay.test.js tests/extension-audio.test.js tests/resource-usage.test.js`.
+- Full suite: `node --test tests/music-autoplay.test.js tests/extension-audio.test.js tests/resource-usage.test.js tests/follow-badge.test.js`.
