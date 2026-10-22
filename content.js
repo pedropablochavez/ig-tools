@@ -22,9 +22,19 @@
   // Messages come from intercept.js, running in this same page.
   const fromPage = (e) => e.source === window && e.origin === location.origin;
 
+  // Retain recent data only; infinite scrolling must not grow tab caches indefinitely.
+  function remember(store, key, value, limit = 500) {
+    store.delete(key);
+    if (store instanceof Map) store.set(key, value); else store.add(key);
+    if (store.size > limit) {
+      const oldest = store.keys().next().value;
+      store.delete(oldest);
+      return oldest;
+    }
+  }
+
   // ---------- Data ----------
-  // This extension never sends requests of its own to Instagram. It only reads the
-  // profile picture URLs that the page already received while you browse (see intercept.js).
+  // Profile pictures come from data the page already received while you browse.
 
   const seen = new Map();
   let interceptStats = null;
@@ -39,7 +49,7 @@
     for (const p of e.data.pics) {
       if (typeof p?.username !== 'string' || typeof p.url !== 'string') continue;
       const prev = seen.get(p.username);
-      if (!prev || p.hd || !prev.hd) seen.set(p.username, { url: p.url, hd: !!p.hd });
+      if (!prev || p.hd || !prev.hd) remember(seen, p.username, { url: p.url, hd: !!p.hd });
     }
   });
 
@@ -202,13 +212,14 @@
   const mediaByCode = new Map();
   window.addEventListener('message', (e) => {
     if (!fromPage(e) || e.data?.source !== 'ighd-media' || !Array.isArray(e.data.media)) return;
-    let music = false;
+    let credits = false;
     for (const m of e.data.media) {
       if (typeof m?.code !== 'string' || !Array.isArray(m.items)) continue;
-      mediaByCode.set(m.code, mergePost(mediaByCode.get(m.code), m));
-      if (m.music) music = true;
+      const evicted = remember(mediaByCode, m.code, mergePost(mediaByCode.get(m.code), m));
+      if (evicted) detailsTried.delete(evicted); // revisiting an evicted post may reload its data
+      if (m.music || m.audio) credits = true;
     }
-    if (music) queueScan();
+    if (credits) queueScan();
   });
 
   // A real video file beats a still image, which beats nothing.
@@ -219,9 +230,14 @@
   function mergePost(prev, next) {
     if (!prev) return next;
     const music = prev.music || next.music || null;
+    let audio = next.audio || prev.audio || null;
+    if (prev.audio && next.audio && prev.audio.original === next.audio.original) {
+      audio = { ...next.audio, title: next.audio.title || prev.audio.title,
+        artist: next.audio.artist || prev.audio.artist };
+    }
     if (prev.items.length !== next.items.length) {
       const total = (p) => p.items.reduce((s, it) => s + itemScore(it), 0);
-      return { ...(total(next) >= total(prev) ? next : prev), music };
+      return { ...(total(next) >= total(prev) ? next : prev), music, audio };
     }
     const items = prev.items.map((p, i) => {
       const n = next.items[i];
@@ -233,7 +249,7 @@
       best.thumb = best.thumb || p.thumb || n.thumb;
       return best;
     });
-    return { ...prev, username: prev.username || next.username, items, music };
+    return { ...prev, username: prev.username || next.username, items, music, audio };
   }
 
   const POST_PATH = /\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,})/;
@@ -285,7 +301,7 @@
   }
 
   let toastTimer = null;
-  function toast(text) {
+  function toast(text, duration = 3000) {
     let el = document.getElementById('ighd-toast');
     if (!el) {
       el = document.createElement('div');
@@ -295,7 +311,7 @@
     el.textContent = text;
     el.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+    toastTimer = setTimeout(() => el.classList.remove('show'), duration);
   }
 
   function download(url, filename) {
@@ -311,17 +327,47 @@
     r.readAsDataURL(new Blob([buf], { type }));
   });
 
-  // Videos go through mp4fix.js first, which repairs 1 fps "photo + music" stories so the
-  // picture shows right away. Anything else (or if reading the file fails) downloads as is.
-  async function downloadMedia(it, filename) {
-    if (it.type === 'video' && typeof globalThis.igtFixLowFpsMp4 === 'function') {
+  const MAX_REPAIR_BYTES = 8 * 1024 * 1024;
+  let repairingDownload = false;
+  // Only small story videos need local timing repair. Ordinary videos go straight to
+  // the browser downloader, without buffering a copy or downloading the same file twice.
+  async function downloadMedia(it, filename, repairStory = false) {
+    if (repairStory && !repairingDownload && it.type === 'video'
+      && typeof globalThis.igtFixLowFpsMp4 === 'function') {
+      repairingDownload = true;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
       try {
-        const res = await fetch(it.url);
-        if (res.ok) {
-          const fixed = globalThis.igtFixLowFpsMp4(await res.arrayBuffer());
-          if (fixed) return download(await toDataUrl(fixed, 'video/mp4'), filename);
+        const res = await fetch(it.url, { signal: controller.signal });
+        const length = Number(res.headers.get('content-length'));
+        if (res.ok && length > 0 && length <= MAX_REPAIR_BYTES && res.body) {
+          const reader = res.body.getReader(), chunks = [];
+          let size = 0;
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              size += value.byteLength;
+              if (size > MAX_REPAIR_BYTES) {
+                reader.cancel().catch(() => {});
+                controller.abort();
+                throw new Error('Story too large for repair');
+              }
+              chunks.push(value);
+            }
+          } finally { reader.releaseLock(); }
+          const bytes = new Uint8Array(size);
+          let offset = 0;
+          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+          chunks.length = 0;
+          let fixed = null;
+          try { fixed = globalThis.igtFixLowFpsMp4(bytes.buffer); } catch (_) {}
+          // Reuse the bytes even if no repair applies, rather than fetching them again.
+          return await download(await toDataUrl(fixed || bytes.buffer, 'video/mp4'), filename);
         }
-      } catch (_) {}
+        controller.abort();
+      } catch (_) { controller.abort(); }
+      finally { clearTimeout(timer); repairingDownload = false; }
     }
     return download(it.url, filename);
   }
@@ -338,7 +384,7 @@
 
   // How much of an element is really visible: its box clipped by the viewport and by every
   // ancestor that hides overflow (carousel slides off to the side end up with zero area).
-  function visibleArea(el, stop) {
+  function visibleArea(el, stop, clips = null) {
     const r = el.getBoundingClientRect();
     let [x1, y1, x2, y2] = [r.left, r.top, r.right, r.bottom];
     const clip = (b) => {
@@ -346,12 +392,36 @@
       x2 = Math.min(x2, b.right); y2 = Math.min(y2, b.bottom);
     };
     clip({ left: 0, top: 0, right: innerWidth, bottom: innerHeight });
+    if (x2 <= x1 || y2 <= y1) return 0;
     for (let a = el.parentElement; a && a !== stop; a = a.parentElement) {
       const cs = getComputedStyle(a);
-      if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') clip(a.getBoundingClientRect());
+      // Root overflow is applied to the viewport, already clipped above. Its DOM rect
+      // moves with document scrolling and must not clip viewport-relative media a second time.
+      if (a === document.documentElement || cs.display === 'contents') continue;
+      if (a === document.body) {
+        const root = getComputedStyle(document.documentElement);
+        if (document.scrollingElement === a
+          || (root.overflowX === 'visible' && root.overflowY === 'visible')) continue;
+      }
+      if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
+      const b = a.getBoundingClientRect();
+      if (cs.overflowX !== 'visible') {
+        x1 = Math.max(x1, b.left);
+        x2 = Math.min(x2, b.right);
+      }
+      if (cs.overflowY !== 'visible') {
+        y1 = Math.max(y1, b.top);
+        y2 = Math.min(y2, b.bottom);
+      }
+      if (clips) clips.push({ tag: a.tagName, overflowX: cs.overflowX, overflowY: cs.overflowY,
+        top: Math.round(b.top), bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right) });
       if (x2 <= x1 || y2 <= y1) return 0;
     }
     return Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  }
+
+  function viewportArea(rect) {
+    return Math.min(rect.width, innerWidth) * Math.min(rect.height, innerHeight);
   }
 
   // Index from the carousel position: slides are shifted by multiples of their own width.
@@ -435,7 +505,7 @@
     let post = mediaByCode.get(code);
     if (!post) {
       // The feed had no data for this post: ask the site for its details.
-      detailsTried.add(code);
+      remember(detailsTried, code, null, 2000);
       await loadPostDetails(code);
       post = mediaByCode.get(code);
     }
@@ -454,7 +524,7 @@
     // the full .mp4 file; we pick it up, download it and go back to where you were.
     if (!ready(item, sel.showsVideo)) {
       toast('Loading the full video…');
-      detailsTried.add(code);
+      remember(detailsTried, code, null, 2000);
       await loadPostDetails(code);
       item = await waitForItem(code, sel.index, sel.showsVideo, 2000) || item;
     }
@@ -500,10 +570,24 @@
       <rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>
     </svg>`;
 
-  const player = new Audio();
-  player.preload = 'auto';
+  const player = globalThis.igtCreateMusicPlayer ? globalThis.igtCreateMusicPlayer() : new Audio();
+  player.preload = 'metadata';
   let playing = null; // { code, music, button }
-  const userPaused = new Set(); // posts you paused with the button while the mouse is on them
+  let playRequest = null;
+  let autoplayBlocked = false;
+  let autoplayNoticeShown = false;
+  let autoAttemptedButton = null;
+  let lastFocus = undefined;
+  let lastPlayError = null;
+  const musicPosts = new Map(); // includes posts without songs, so they can take over with silence
+  const userPaused = new Set(); // posts manually paused until focus moves to another post
+  const watchedPosts = new Set();
+
+  function stopMusic() {
+    if (!playRequest && player.paused) return;
+    playRequest = null; // ignore the result of a play() cancelled by scrolling or hiding the tab
+    player.pause();
+  }
 
   // Volume, remembered between visits.
   const VOLUME_KEY = 'igt-music-volume';
@@ -522,7 +606,10 @@
   function refreshMusicIcons() {
     for (const b of document.querySelectorAll('.ighd-music')) {
       const on = !!playing && playing.button === b && !player.paused;
-      b.innerHTML = on ? PAUSE_ICON : MUSIC_ICON;
+      if (b.dataset.igtPlaying !== String(on)) {
+        b.dataset.igtPlaying = String(on);
+        b.innerHTML = on ? PAUSE_ICON : MUSIC_ICON;
+      }
       b.title = on ? 'Pause music' : "Play this post's music";
     }
   }
@@ -531,51 +618,83 @@
   player.addEventListener('timeupdate', () => {
     if (!playing) return;
     if (!playing.button.isConnected) {
-      // The site re-rendered the post: follow the new button, or stop if the post is gone.
+      // The site re-rendered the post: follow the new button or re-evaluate visibility.
       const again = document.querySelector(`.ighd-music[data-code="${playing.code}"]`);
       if (again) playing.button = again;
       else {
-        player.pause();
-        return;
+        // Feed virtualization can remove the old post during a handoff. Let the focus
+        // controller decide when to stop, rather than cutting the song between posts.
+        updateFocusPlay();
       }
     }
     const { start, duration } = playing.music;
     if (player.currentTime >= (start + duration) / 1000) player.currentTime = start / 1000;
   });
 
-  // Pause when the post scrolls out of view, like the app does.
-  const musicVisibility = new IntersectionObserver((entries) => {
-    for (const e of entries) {
-      if (playing && e.target.contains(playing.button) && e.intersectionRatio < 0.3) player.pause();
-    }
-  }, { threshold: [0, 0.3] });
+  // Observe the photo itself, rather than the whole article (which can include long captions).
+  // The focus calculation below also handles photos larger than the viewport.
+  const musicVisibility = new IntersectionObserver(updateFocusPlay, {
+    threshold: [0, 0.1, 0.3, 0.6, 0.9, 1]
+  });
+  const observedMusicBoxes = new Set();
+  function observeMusicBox(box) { observedMusicBoxes.add(box); musicVisibility.observe(box); }
 
   // `fromClick`: started with the button (shows the song name and reports errors).
   async function startMusic(button, code, fromClick) {
     const music = mediaByCode.get(code)?.music;
-    if (!music) return;
-    if (playing?.button !== button || playing.code !== code) {
-      playing = { code, music, button };
-      if (player.src !== music.url) player.src = music.url;
-      if (player.readyState < 1) {
-        await new Promise((r) => player.addEventListener('loadedmetadata', r, { once: true }));
-      }
-      if (playing?.code !== code) return; // another post took over meanwhile
-      player.currentTime = music.start / 1000;
-    }
-    const name = [music.title, music.artist].filter(Boolean).join(' · ');
+    if (!music || playRequest?.button === button) return;
+    // The click permits a fresh attempt. Do not keep the old block latched while this
+    // clip loads: scrolling to the next post may cancel its play() promise first.
+    if (fromClick) autoplayBlocked = false;
+    const request = { button, code };
+    playRequest = request;
     try {
+      if (playing?.code !== code || playing.music.url !== music.url) {
+        player.pause();
+        playing = { code, music, button, path: location.pathname };
+        if (player.src !== music.url) player.src = music.url;
+        player.setClip?.(music.start, music.duration);
+        // currentTime also sets the initial position before metadata is available. Call play()
+        // in this event handler: waiting for loadedmetadata can lose the user's activation.
+        player.currentTime = music.start / 1000;
+      } else {
+        playing.button = button;
+        playing.path = location.pathname;
+      }
+      songLog(`music ${code}: trying (${fromClick ? 'button' : 'autoplay'})`);
       await player.play();
+      if (playRequest !== request) return;
+      autoplayBlocked = false;
+      lastPlayError = null;
+      songLog(`music ${code}: playing (${fromClick ? 'button' : 'autoplay'})`);
+      const name = [music.title, music.artist].filter(Boolean).join(' · ');
       if (fromClick && name) toast(`♪ ${name}`);
-    } catch (_) {
-      // Browsers block sound until you have clicked somewhere on the page once.
-      if (fromClick) toast('Could not play the music.');
+    } catch (error) {
+      if (playRequest !== request || error.name === 'AbortError') return;
+      songLog(`music ${code}: ${error.name || 'playback error'}`);
+      lastPlayError = { code, name: error.name || 'playback error', mode: fromClick ? 'button' : 'autoplay',
+        message: String(error.message || '').slice(0, 300),
+        userActivated: globalThis.navigator?.userActivation?.hasBeenActive ?? null };
+      if (error.name === 'NotAllowedError') {
+        autoplayBlocked = true;
+        if (!autoplayNoticeShown) {
+          autoplayNoticeShown = true;
+          toast('The browser rejected autoplay. ♪ plays manually. Check the site’s Autoplay permission if this persists.', 10000);
+        }
+      } else if (fromClick) {
+        toast('Could not play the music.');
+      }
+    } finally {
+      if (playRequest === request) {
+        playRequest = null;
+        refreshMusicIcons();
+      }
     }
   }
 
   function toggleMusic(button, code) {
-    if (playing?.button === button && !player.paused) {
-      player.pause();
+    if (playing?.button === button && (!player.paused || playRequest?.button === button)) {
+      stopMusic();
       userPaused.add(code);
     } else {
       userPaused.delete(code);
@@ -583,25 +702,98 @@
     }
   }
 
-  // Plays the song of the post you are looking at, like reels: the photo post that fills most
-  // of the screen. Scrolling to another post switches to its song; no post on screen, silence.
-  function focusedMusicButton() {
-    const dialog = document.querySelector('[role="dialog"]');
+  // The next post takes over after filling 60% of the viewport's feed column. A shorter
+  // photo must fit fully in view. Keep a partially visible post's song only while it
+  // remains the dominant post; never carry it past the post or over another source.
+  function musicFocus(diagnostics = false) {
+    const dialogs = [...document.querySelectorAll('[role="dialog"], dialog[open]')].filter((d) =>
+      getComputedStyle(d).visibility !== 'hidden' && visibleArea(d, null) > 0
+    );
+    const dialog = dialogs[dialogs.length - 1];
     let best = null;
-    let bestFrac = 0;
+    let bestArea = 0;
+    let bestDistance = Infinity;
+    let dominant = null;
+    let dominantArea = 0;
+    let dominantDistance = Infinity;
+    const candidates = [];
+    const posts = new Map();
+    for (const [scope, post] of musicPosts) {
+      if (!scope.isConnected || !post.box.isConnected) {
+        musicVisibility.unobserve?.(post.box);
+        observedMusicBoxes.delete(post.box);
+        musicPosts.delete(scope);
+        continue;
+      }
+      posts.set(post.box, { ...post, button: null });
+    }
     for (const b of document.querySelectorAll('.ighd-music')) {
-      if (dialog && !dialog.contains(b)) continue; // a post window covers the feed
       const box = b.closest('.ighd-music-wrap')?.parentElement;
       if (!box) continue;
+      posts.set(box, { code: b.dataset.code, box, button: b });
+    }
+    // Reels / videos can start before their post data or download bar is available.
+    // Include native media directly, so pausing does not depend on identifying its code.
+    for (const media of document.querySelectorAll('video, audio')) {
+      const r = media.getBoundingClientRect();
+      if (media.tagName === 'VIDEO' && (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth)) continue;
+      const style = getComputedStyle(media);
+      if (style.visibility === 'hidden' || style.opacity === '0') continue;
+      let box = media;
+      if (r.width < 150 || r.height < 150) {
+        // An audio element may be hidden inside a visible post.
+        if (media.tagName !== 'AUDIO' || media.paused || media.muted || !media.volume) continue;
+        const scope = media.closest('article');
+        box = scope && mediaBox(scope);
+        if (!box) continue;
+      }
+      const known = [...posts.values()].find((p) => p.box === box || p.box.contains?.(box));
+      if (known) known.native = true;
+      else posts.set(box, { code: null, box, button: null, native: true });
+    }
+    for (const post of posts.values()) {
+      const { box, code } = post;
       const r = box.getBoundingClientRect();
-      const area = r.width * r.height;
-      const frac = area ? visibleArea(box, null) / area : 0;
-      if (frac > bestFrac) {
-        best = b;
-        bestFrac = frac;
+      const clips = diagnostics ? [] : null;
+      const inViewport = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0))
+        * Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
+      if (!diagnostics && inViewport <= 0) continue;
+      const area = inViewport > 0 ? visibleArea(box, null, clips) : 0;
+      const available = viewportArea(r);
+      const fraction = available > 0 ? area / available : 0;
+      const columnArea = Math.min(r.width, innerWidth) * innerHeight;
+      const required = Math.min(available, columnArea * 0.6);
+      const covered = !!dialog && !dialog.contains(box);
+      const eligible = available > 0 && area >= required;
+      if (diagnostics) {
+        const candidate = { code, visible: Math.round(fraction * 100), native: !!post.native,
+        top: Math.round(r.top), bottom: Math.round(r.bottom),
+        viewportVisible: available > 0 ? Math.round(inViewport / available * 100) : 0,
+        screen: columnArea > 0 ? Math.round(area / columnArea * 100) : 0,
+        width: Math.round(r.width), height: Math.round(r.height), covered, eligible };
+        if (area === 0 && inViewport > 0) candidate.clippedBy = clips;
+        candidates.push(candidate);
+      }
+      const distance = Math.abs((r.top + r.bottom) / 2 - innerHeight / 2);
+      if (!covered && area > 0 && (area > dominantArea
+        || (area === dominantArea && distance < dominantDistance))) {
+        dominant = post;
+        dominantArea = area;
+        dominantDistance = distance;
+      }
+      if (covered || !eligible) continue;
+      if (area > bestArea || (area === bestArea && distance < bestDistance)) {
+        best = post;
+        bestArea = area;
+        bestDistance = distance;
       }
     }
-    return bestFrac >= 0.6 ? best : null;
+    const target = best?.box === dominant?.box ? best : null;
+    return { target, button: target?.native ? null : target?.button || null, dominant, candidates, dialog };
+  }
+
+  function focusedMusicButton() {
+    return musicFocus().button;
   }
 
   let focusQueued = false;
@@ -611,26 +803,111 @@
     requestAnimationFrame(() => {
       focusQueued = false;
       if (document.hidden) {
-        player.pause();
+        autoAttemptedButton = null;
+        stopMusic();
         return;
       }
-      const b = focusedMusicButton();
+      const focus = musicFocus();
+      const b = focus.button;
+      const code = focus.target?.code || null;
+      if (lastFocus !== code) {
+        lastFocus = code;
+        autoAttemptedButton = null;
+        songLog(`focus: ${code || 'no eligible photo'}`);
+      }
+      if (playing && (playing.path !== location.pathname
+        || (focus.dialog && !focus.dialog.contains(playing.button)))) {
+        stopMusic();
+        if (!focus.target || b === playing.button) return;
+      }
+      if (playing) {
+        const box = playing.button.closest('.ighd-music-wrap')?.parentElement;
+        const area = playing.button.isConnected && box ? visibleArea(box, null) : 0;
+        const other = focus.dominant;
+        const samePost = other && (other.box === box || (other.code && other.code === playing.code));
+        if (area <= 0 || (other && (!samePost || other.native))) stopMusic();
+      }
+      if (!focus.target) {
+        // A small scroll is not a pause while the current post remains dominant.
+        return;
+      }
+      if (playing?.code !== code && playing) userPaused.delete(playing.code);
+      if (focus.target.native) {
+        stopMusic();
+        return;
+      }
       if (!b) {
-        if (playing && !player.paused) player.pause();
+        // A new dominant post takes over with silence while its own song is loading.
+        if (playing?.code !== code || !mediaByCode.get(code)?.music) stopMusic();
         return;
       }
       if (playing?.button === b && !player.paused) return;
       if (playing?.button !== b) {
-        // Moving to another post forgets a manual pause on the previous one.
-        if (playing) userPaused.delete(playing.code);
-        if (!player.paused) player.pause();
+        stopMusic();
       }
-      if (!userPaused.has(b.dataset.code)) startMusic(b, b.dataset.code, false);
+      if (!autoplayBlocked && !userPaused.has(b.dataset.code) && autoAttemptedButton !== b) {
+        // Periodic layout checks must not retry a broken media file over and over.
+        autoAttemptedButton = b;
+        startMusic(b, b.dataset.code, false);
+      }
     });
   }
   window.addEventListener('scroll', updateFocusPlay, { passive: true, capture: true });
   window.addEventListener('resize', updateFocusPlay);
-  document.addEventListener('visibilitychange', updateFocusPlay);
+  document.addEventListener('play', updateFocusPlay, { capture: true });
+  document.addEventListener('volumechange', updateFocusPlay, { capture: true });
+  document.addEventListener('visibilitychange', () => {
+    // Background tabs may suspend animation frames, so pause immediately.
+    if (document.hidden) {
+      autoAttemptedButton = null;
+      stopMusic();
+    }
+    else updateFocusPlay();
+  });
+
+  function retryMusicOnGesture(e) {
+    if (!e.isTrusted || document.hidden || !autoplayBlocked) return;
+    if (e.type === 'keydown' && (e.repeat || !['Enter', 'Space'].includes(e.code))) return;
+    // The music controls have their own click handlers; don't turn a pause into a restart.
+    if (e.target?.closest?.('.ighd-music-wrap')) return;
+    // Remember the gesture even if it happens in the gap between posts. Otherwise the
+    // old block flag would prevent the next post from ever making an autoplay attempt.
+    autoplayBlocked = false;
+    autoAttemptedButton = null;
+    const b = focusedMusicButton();
+    if (!b || userPaused.has(b.dataset.code)) return;
+    // Stay inside the trusted gesture instead of deferring play() to an animation frame.
+    startMusic(b, b.dataset.code, false);
+  }
+  document.addEventListener('click', retryMusicOnGesture, { capture: true });
+  document.addEventListener('keydown', retryMusicOnGesture, { capture: true });
+
+  // Catch layout shifts, SPA dialog changes and scroll containers even when no new scroll
+  // event reaches us. Hidden tabs do no work; a failed attempt is limited to once per focus.
+  setInterval(() => {
+    if (!document.hidden && (playing || musicPosts.size || document.querySelector('.ighd-music'))) updateFocusPlay();
+  }, 600);
+
+  window.addEventListener('message', (e) => {
+    if (!fromPage(e)) return;
+    if (e.data?.source === 'ighd-load-post-result' && typeof e.data.code === 'string') {
+      updateFocusPlay();
+      return;
+    }
+    if (e.data?.source !== 'ighd-music-status') return;
+    const focus = musicFocus(true);
+    window.postMessage({ source: 'ighd-music-status-result', text: JSON.stringify({
+      viewport: `${innerWidth}x${innerHeight}`, hidden: document.hidden,
+      version: globalThis.chrome?.runtime?.getManifest?.()?.version || 'unknown',
+      focused: focus.target?.code || null, playing: playing?.code || null,
+      dominant: focus.dominant?.code || (focus.dominant?.native ? 'native media' : null),
+      paused: player.paused, pending: playRequest?.code || null, blocked: autoplayBlocked,
+      lastError: lastPlayError, userActivated: globalThis.navigator?.userActivation?.hasBeenActive ?? null,
+      audioEngine: player.engine || 'page',
+      manualPause: !!focus.button && userPaused.has(focus.button.dataset.code),
+      dialog: !!focus.dialog, candidates: focus.candidates
+    }) }, location.origin);
+  });
 
   // Hovering a post also asks for its song right away (see below).
   function watchHover(scope) {
@@ -642,7 +919,8 @@
   // ---------- Finding the song of feed posts ----------
   // The feed data often has no song for a post. When you stop on a photo post (or point at it),
   // intercept.js asks the site for that post's details, the same request the site makes when you
-  // open the post; the answer includes the song. One post at a time, each only once per visit.
+  // open the post; the answer includes the song. One post at a time, with recent lookups
+  // deduplicated. Revisiting an evicted post can reload its details.
 
   const detailsTried = new Set();
   const detailsQueue = [];
@@ -652,14 +930,16 @@
   const logged = new Set();
   function songLog(text) {
     if (logged.has(text)) return;
-    logged.add(text);
+    remember(logged, text, null, 200);
     window.postMessage({ source: 'ighd-log', text: `feed: ${text}` }, location.origin);
   }
 
   const prefetchObserver = new IntersectionObserver((entries) => {
+    if (document.hidden) return;
     for (const e of entries) {
       const scope = e.target;
-      if (e.intersectionRatio >= 0.6) {
+      const available = viewportArea(scope.getBoundingClientRect());
+      if (available > 0 && visibleArea(scope, null) / available >= 0.6) {
         if (!dwellTimers.has(scope)) {
           dwellTimers.set(scope, setTimeout(() => {
             dwellTimers.delete(scope);
@@ -671,7 +951,7 @@
         dwellTimers.delete(scope);
       }
     }
-  }, { threshold: [0, 0.6] });
+  }, { threshold: Array.from({ length: 21 }, (_, i) => i / 20) });
 
   // Asks the site for a post's full details (song, full video files). Resolves when answered.
   const detailsWaiters = new Map();
@@ -683,18 +963,25 @@
   });
   function loadPostDetails(code) {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve({ ok: false, reason: 'timeout' }), 10000);
-      const list = detailsWaiters.get(code) || [];
-      list.push((r) => {
+      const done = (result) => {
         clearTimeout(timer);
-        resolve(r);
-      });
+        const pending = detailsWaiters.get(code);
+        if (pending) {
+          const remaining = pending.filter((fn) => fn !== done);
+          if (remaining.length) detailsWaiters.set(code, remaining); else detailsWaiters.delete(code);
+        }
+        resolve(result);
+      };
+      const timer = setTimeout(() => done({ ok: false, reason: 'timeout' }), 10000);
+      const list = detailsWaiters.get(code) || [];
+      list.push(done);
       detailsWaiters.set(code, list);
       if (list.length === 1) window.postMessage({ source: 'ighd-load-post', code }, location.origin);
     });
   }
 
   function requestPrefetch(scope) {
+    if (document.hidden || !scope.isConnected) return;
     const group = scope.__igtGroup;
     const code = group && codeFor(group);
     if (!code) return songLog('a post without a link to identify it');
@@ -703,17 +990,21 @@
     if (post && post.items.every((it) => it.type === 'video')) return; // has its own sound
     if (!post && scope.querySelector('video')) return; // a reel or video: has its own sound
     if (detailsTried.has(code)) return;
-    detailsTried.add(code);
+    remember(detailsTried, code, null, 2000);
     songLog(`post ${code}: asking for its details`);
-    detailsQueue.push(code);
+    detailsQueue.push({ code, scope });
     if (detailsQueue.length > 5) detailsQueue.shift();
     runPrefetch();
   }
 
   async function runPrefetch() {
     if (detailsBusy || !detailsQueue.length) return;
+    if (document.hidden) { detailsQueue.length = 0; return; }
+    const next = detailsQueue.pop();
+    if (!next.scope.isConnected || codeFor(next.scope.__igtGroup) !== next.code
+      || visibleArea(next.scope, null) <= 0) { runPrefetch(); return; }
     detailsBusy = true;
-    await loadPostDetails(detailsQueue.pop()); // the post you stopped on most recently first
+    await loadPostDetails(next.code); // the post you stopped on most recently first
     setTimeout(() => {
       detailsBusy = false;
       runPrefetch();
@@ -723,10 +1014,20 @@
   function watchPost(group) {
     const scope = group.closest('article');
     if (!scope) return;
+    const code = codeFor(group);
+    const known = musicPosts.get(scope);
+    if (code && (!known || known.code !== code || !known.box.isConnected)) {
+      const box = mediaBox(scope);
+      if (box) {
+        if (known) musicVisibility.unobserve?.(known.box);
+        musicPosts.set(scope, { code, box });
+        observeMusicBox(box);
+      }
+    }
     scope.__igtGroup = group;
     watchHover(scope);
-    if (scope.dataset.igtWatch) return;
-    scope.dataset.igtWatch = '1';
+    if (watchedPosts.has(scope)) return;
+    watchedPosts.add(scope);
     prefetchObserver.observe(scope);
   }
 
@@ -763,6 +1064,71 @@
       else if (b.width > w + 4 && b.height > h + 4) break;
     }
     return box;
+  }
+
+  // Find the identity column by the author's link, rather than site class names or the
+  // translated recommendation text. Insert after its first row, before any subtitle.
+  function audioHeaderSlot(scope, username) {
+    if (!username) return null;
+    const media = [...scope.querySelectorAll('img, video')]
+      .map((el) => el.getBoundingClientRect()).filter((r) => r.width >= 150 && r.height >= 150);
+    if (!media.length) return null;
+    const mediaTop = Math.min(...media.map((r) => r.top));
+    for (const link of scope.querySelectorAll('a[href]')) {
+      let path;
+      try { path = new URL(link.getAttribute('href'), location.origin).pathname; } catch (_) { continue; }
+      if (path.replace(/\/$/, '').toLowerCase() !== `/${username.toLowerCase()}`
+        || !link.textContent.trim() || link.querySelector('img')) continue;
+      const line = link.getBoundingClientRect();
+      if (!line.width || !line.height || line.bottom > mediaTop + 2) continue;
+      let row = link, slot = null;
+      while (row.parentElement && row.parentElement !== scope) {
+        const parent = row.parentElement;
+        const css = getComputedStyle(parent);
+        if (css.display === 'contents') { row = parent; continue; }
+        const r = parent.getBoundingClientRect();
+        if (r.top < line.top - 4 || r.bottom > mediaTop + 2 || parent.querySelector('img, video')) break;
+        // Remember the outermost text column, passing through single-link wrappers.
+        // A horizontal row holds the username / time; adding a sibling there would split it.
+        if (css.display === 'block' || (css.display.includes('flex') && css.flexDirection.startsWith('column'))) {
+          slot = { parent, row };
+        }
+        if (r.bottom > line.bottom + 4 || parent.querySelector('.ighd-audio-details')) break;
+        row = parent;
+      }
+      if (slot) return slot;
+    }
+    return null;
+  }
+
+  function addAudioDetails(group) {
+    const scope = group.closest('article') || group.closest('[role="dialog"]');
+    if (!scope) return;
+    const code = codeFor(group), post = code && mediaByCode.get(code);
+    const info = post?.audio || post?.music;
+    const name = [info?.title, info?.artist].filter((v) => typeof v === 'string' && v.trim()).join(' · ');
+    const existing = scope.querySelector('.ighd-audio-details');
+    // Recycled articles must not keep the previous post's credits.
+    if (existing && (existing.dataset.code !== code || !name)) existing.remove();
+    if (!name) return;
+    const slot = audioHeaderSlot(scope, post.username);
+    if (!slot) return;
+    // The site sometimes provides this row itself. Leave its own audio link in place.
+    const native = [...scope.querySelectorAll('a[href*="/reels/audio/"], a[href*="/music/"]')]
+      .some((link) => {
+        const r = link.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.bottom <= slot.parent.getBoundingClientRect().bottom;
+      });
+    if (native) { scope.querySelector('.ighd-audio-details')?.remove(); return; }
+    const label = scope.querySelector('.ighd-audio-details') || document.createElement('div');
+    label.className = 'ighd-audio-details';
+    label.dataset.code = code;
+    const value = `♪ ${name}`;
+    if (label.textContent !== value) label.textContent = value;
+    label.title = name;
+    if (label.parentElement !== slot.parent || slot.row.nextSibling !== label) {
+      slot.parent.insertBefore(label, slot.row.nextSibling);
+    }
   }
 
   function addMusicButton(group) {
@@ -807,7 +1173,7 @@
 
     if (playing?.code === code) playing.button = b;
     refreshMusicIcons();
-    musicVisibility.observe(scope);
+    observeMusicBox(box);
     watchHover(scope);
     updateFocusPlay();
   }
@@ -831,9 +1197,28 @@
   // Adds the download button to each post's like / comment / share row, and the music button
   // on top of the photo when the post has a song.
   function addPostButtons() {
+    for (const scope of watchedPosts) {
+      if (scope.isConnected) continue;
+      prefetchObserver.unobserve(scope);
+      clearTimeout(dwellTimers.get(scope));
+      dwellTimers.delete(scope);
+      watchedPosts.delete(scope);
+      musicPosts.delete(scope);
+    }
+    for (const box of observedMusicBoxes) {
+      if (box.isConnected) continue;
+      musicVisibility.unobserve(box);
+      observedMusicBoxes.delete(box);
+    }
     if (location.pathname.startsWith('/stories/')) return;
     for (const group of postBars()) {
+      const scope = group.closest('article');
+      if (scope) {
+        const r = scope.getBoundingClientRect();
+        if (r.bottom < -innerHeight || r.top > innerHeight * 2) continue;
+      }
       addDownloadButton(group);
+      addAudioDetails(group);
       addMusicButton(group);
       watchPost(group);
     }
@@ -841,15 +1226,17 @@
 
   let scanQueued = false;
   function queueScan() {
-    if (scanQueued) return;
+    if (document.hidden || scanQueued) return;
     scanQueued = true;
     setTimeout(() => {
       scanQueued = false;
+      if (document.hidden) return;
       addPostButtons();
     }, 400);
   }
   new MutationObserver(queueScan).observe(document.body, { childList: true, subtree: true });
   window.addEventListener('scroll', queueScan, { passive: true });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) queueScan(); });
   addPostButtons();
 
   // ---------- Story download ----------
@@ -860,7 +1247,7 @@
     for (const it of e.data.items) {
       if (typeof it?.pk !== 'string') continue;
       const prev = mediaByPk.get(it.pk);
-      if (!prev || itemScore(it) > itemScore(prev)) mediaByPk.set(it.pk, it);
+      if (!prev || itemScore(it) > itemScore(prev)) remember(mediaByPk, it.pk, it);
     }
   });
 
@@ -909,7 +1296,7 @@
       return;
     }
     const user = it.username || location.pathname.split('/')[2] || 'story';
-    const ok = await downloadMedia(it, `${user}_story_${it.pk}.${extFrom(it.url, it.type)}`);
+    const ok = await downloadMedia(it, `${user}_story_${it.pk}.${extFrom(it.url, it.type)}`, true);
     toast(ok ? 'Story downloaded ✓' : 'Download failed');
   }
 
@@ -956,6 +1343,7 @@
   // The site is a single-page app: watch URL changes to show/hide the buttons.
   let lastPath = null;
   function sync() {
+    if (document.hidden) return;
     const inStory = location.pathname.startsWith('/stories/');
     if (inStory && !addStoryButton()) {
       const host = storyHost();

@@ -1,11 +1,41 @@
 // Runs inside the page itself (world: MAIN) from the very start.
 // It passively reads the responses the site already downloads on its own while you browse
-// and picks out profile picture URLs. It never sends any request of its own and never
-// stores or transmits anything: data only goes to content.js, in the same tab.
+// and picks out media / audio data. Its only own request is a queued post-detail lookup.
+// Temporary data goes only to content.js, in the same tab.
 (() => {
   'use strict';
 
   const OK_HOST = /(^|\.)(cdninstagram\.com|fbcdn\.net)$/;
+  const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+  function remember(store, key, value, limit = 500) {
+    store.delete(key);
+    if (store instanceof Map) store.set(key, value); else store.add(key);
+    if (store.size > limit) store.delete(store.keys().next().value);
+  }
+
+  // Read only a bounded copy of JSON. Cancelling this reader does not cancel the site's
+  // original response; never wait on tee cancellation, which can await the original reader.
+  async function readResponseText(res) {
+    if (Number(res.headers.get('content-length')) > MAX_RESPONSE_BYTES || !res.body) {
+      res.body?.cancel().catch(() => {});
+      return null;
+    }
+    const reader = res.body.getReader(), decoder = new TextDecoder(), parts = [];
+    let size = 0, expired = false;
+    const timer = setTimeout(() => { expired = true; reader.cancel().catch(() => {}); }, 8000);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (expired) return null;
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_RESPONSE_BYTES) { reader.cancel().catch(() => {}); return null; }
+        parts.push(decoder.decode(value, { stream: true }));
+      }
+      parts.push(decoder.decode());
+      return parts.join('');
+    } finally { clearTimeout(timer); reader.releaseLock(); }
+  }
 
   function validUrl(u) {
     try { return OK_HOST.test(new URL(u).hostname); } catch (_) { return false; }
@@ -90,21 +120,59 @@
     };
   }
 
+  // Header credits are useful for videos too, even when there is no separate audio URL.
+  // Keep them separate from `music`, which is exclusively the photo playback source.
+  function findAudioDetails(node) {
+    const text = (v) => typeof v === 'string' ? v.trim() : '';
+    const original = (o) => {
+      if (!o || typeof o !== 'object') return null;
+      const artist = text(o.ig_artist?.username) || text(o.ig_artist?.full_name);
+      return { title: text(o.original_audio_title) || 'Original audio', artist, original: true };
+    };
+    const licensed = (o) => {
+      if (!o || typeof o !== 'object') return null;
+      const title = text(o.title), artist = text(o.display_artist);
+      return title || artist ? { title, artist, original: false } : null;
+    };
+    const walk = (o, depth) => {
+      if (!o || typeof o !== 'object' || depth > 6) return null;
+      if (o.audio_type === 'original_sounds' && o.original_sound_info) return original(o.original_sound_info);
+      const song = licensed(o.music_asset_info) || licensed(o.music_info?.music_asset_info)
+        || (o.display_artist ? licensed(o) : null);
+      if (song) return song;
+      if (o.original_sound_info) return original(o.original_sound_info);
+      if (text(o.original_audio_title)) return original(o);
+      for (const v of Object.values(o)) {
+        const found = walk(v, depth + 1);
+        if (found) return found;
+      }
+      return null;
+    };
+    for (const [key, value] of Object.entries(node)) {
+      if (!/music|audio|sound/i.test(key) && key !== 'clips_metadata') continue;
+      const found = key === 'original_sound_info' ? original(value)
+        : key === 'music_asset_info' ? licensed(value) : walk(value, 0);
+      if (found) return found;
+    }
+    return null;
+  }
+
   function toPost(node) {
     const code = node.code || node.shortcode;
     const children = node.carousel_media || node.edge_sidecar_to_children?.edges?.map((e) => e.node);
     const items = (Array.isArray(children) && children.length ? children : [node])
+      .slice(0, 100)
       .map(mediaItem)
       .filter(Boolean);
     if (!items.length) return null;
     const username = (node.user?.username || node.owner?.username || '').toLowerCase();
-    return { code, username, items, music: findMusic(node) };
+    return { code, username, items, music: findMusic(node), audio: findAudioDetails(node) };
   }
 
-  function collect(node, out, depth) {
-    if (!node || typeof node !== 'object' || depth > 80) return;
+  function collect(node, out, depth, budget = { left: 20000 }) {
+    if (!node || typeof node !== 'object' || depth > 60 || --budget.left < 0) return;
     if (Array.isArray(node)) {
-      for (const x of node) collect(x, out, depth + 1);
+      for (const x of node) { if (budget.left <= 0) break; collect(x, out, depth + 1, budget); }
       return;
     }
     if (typeof node.username === 'string') {
@@ -133,8 +201,9 @@
       }
     }
     for (const k in node) {
+      if (--budget.left <= 0) break;
       const v = node[k];
-      if (v && typeof v === 'object') collect(v, out, depth + 1);
+      if (v && typeof v === 'object') collect(v, out, depth + 1, budget);
     }
   }
 
@@ -143,8 +212,9 @@
     try { return [JSON.parse(clean)]; } catch (_) {}
     // Some GraphQL responses arrive as several JSON documents, one per line.
     const parts = [];
-    for (const line of clean.split('\n')) {
-      const t = line.trim();
+    for (const match of clean.matchAll(/[^\r\n]+/g)) {
+      if (parts.length >= 100) break;
+      const t = match[0].trim();
       if (!t) continue;
       try { parts.push(JSON.parse(t)); } catch (_) {}
     }
@@ -156,14 +226,16 @@
 
   // `req`: the request that produced this response (method, url, body, headers), if known.
   function handleText(text, req) {
-    if (typeof text !== 'string') return;
+    if (typeof text !== 'string' || text.length > MAX_RESPONSE_BYTES) return false;
     stats.responses++;
     if (!/profile_pic_url|image_versions2|video_versions|display_url|music|audio/.test(text)) return;
     stats.withPics++;
     const out = { pics: [], media: [], items: [] };
-    for (const obj of parseAll(text)) collect(obj, out, 0);
+    const budget = { left: 20000 };
+    for (const obj of parseAll(text)) { if (budget.left <= 0) break; collect(obj, out, 0, budget); }
     publish(out);
     logSongs(out.media, req);
+    return out.media.some((p) => p.music);
   }
 
   function logSongs(media, req) {
@@ -186,16 +258,20 @@
   }
 
   function publish({ pics, media, items }) {
-    for (const p of pics) stats.users.add(p.username);
+    for (const p of pics) remember(stats.users, p.username, null, 1000);
     if (pics.length) send({ source: 'ighd-pics', pics });
     if (media.length) send({ source: 'ighd-media', media });
     if (items.length) send({ source: 'ighd-items', items });
   }
 
   // Data embedded in the HTML on page load.
+  const scannedScripts = new WeakMap();
   function scanEmbedded() {
     for (const s of document.querySelectorAll('script[type="application/json"]')) {
-      handleText(s.textContent);
+      const text = s.textContent;
+      if (scannedScripts.get(s) === text) continue;
+      scannedScripts.set(s, text);
+      handleText(text);
     }
   }
 
@@ -238,7 +314,22 @@
     return m ? decodeURIComponent(m[1]) : '';
   }
 
-  async function loadPostDetails(code) {
+  const detailJobs = new Map();
+  let detailChain = Promise.resolve();
+  let retryAfterUntil = 0;
+  function loadPostDetails(code) {
+    if (!/^[A-Za-z0-9_-]{5,32}$/.test(code)) return Promise.resolve({ ok: false, reason: 'bad code' });
+    if (detailJobs.has(code)) return detailJobs.get(code);
+    if (detailJobs.size >= 6) return Promise.resolve({ ok: false, reason: 'queue full' });
+    const job = detailChain.then(() => fetchPostDetails(code));
+    detailChain = job.catch(() => {});
+    detailJobs.set(code, job);
+    job.finally(() => detailJobs.delete(code)).catch(() => {});
+    return job;
+  }
+
+  async function fetchPostDetails(code) {
+    if (Date.now() < retryAfterUntil) return { ok: false, status: 429, reason: 'rate limit cooldown' };
     const id = codeToId(code);
     if (!id) return { ok: false, reason: 'bad code' };
     const url = `${location.origin}/api/v1/media/${id}/info/`;
@@ -251,19 +342,25 @@
       ...(apiHeaders || {}),
       'x-csrftoken': cookie('csrftoken')
     };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const res = await origFetch(url, { headers, credentials: 'include' });
-      const text = await res.text();
-      const before = songLog.length;
-      handleText(text, { method: 'GET', url, body: null, headers });
-      const found = songLog.length > before;
+      const res = await origFetch(url, { headers, credentials: 'include', signal: controller.signal });
+      if (res.status === 429) {
+        const retry = res.headers.get('retry-after');
+        const ms = /^\d+$/.test(retry || '') ? Number(retry) * 1000 : Date.parse(retry) - Date.now();
+        retryAfterUntil = Date.now() + Math.min(900000, Math.max(60000, ms || 0));
+      }
+      const text = await readResponseText(res);
+      if (text == null) return { ok: false, status: res.status, reason: 'response limit' };
+      const found = handleText(text, { method: 'GET', url, body: null, headers });
       slog(`post ${code}: HTTP ${res.status}, ${found ? 'song found' : 'no song'}` +
         (res.ok ? '' : ` (${text.slice(0, 120).replace(/\s+/g, ' ')})`));
       return { ok: res.ok, status: res.status };
     } catch (e) {
       slog(`post ${code}: failed (${e.message})`);
       return { ok: false, reason: e.message };
-    }
+    } finally { clearTimeout(timer); }
   }
 
   // ---------- Watching the site's own requests ----------
@@ -289,6 +386,7 @@
   }
 
   const origFetch = window.fetch;
+  let passiveReads = 0;
   window.fetch = async function (...args) {
     const a = args[0];
     const init = args[1] || {};
@@ -306,7 +404,14 @@
       }
     } catch (_) {}
     const res = await origFetch.apply(this, args);
-    if (req) res.clone().text().then((t) => handleText(t, req), () => {});
+    if (req && passiveReads < 2 && Number(res.headers.get('content-length')) <= MAX_RESPONSE_BYTES) {
+      try {
+        const copy = res.clone();
+        passiveReads++;
+        readResponseText(copy).then((t) => { if (t != null) handleText(t, req); })
+          .catch(() => {}).finally(() => { passiveReads--; });
+      } catch (_) {} // Inspection must never reject or delay the site's fetch.
+    }
     return res;
   };
 
@@ -318,12 +423,14 @@
       ? { method: String(method || 'GET').toUpperCase(), url: new URL(url, location.href).href, body: null, headers: {} }
       : null;
     if (this.__igt) {
-      this.addEventListener('load', () => {
+      if (!this.__igtListening) this.addEventListener('load', () => {
         try {
+          if (!this.__igt) return;
           if (this.responseType === '' || this.responseType === 'text') handleText(this.responseText, this.__igt);
           else if (this.responseType === 'json') handleObject(this.response, this.__igt);
         } catch (_) {}
       });
+      this.__igtListening = true;
     }
     return origOpen.call(this, method, url, ...rest);
   };
@@ -340,7 +447,7 @@
   };
 
   window.addEventListener('message', async (e) => {
-    if (e.source !== window) return;
+    if (e.source !== window || e.origin !== location.origin) return;
     if (e.data?.source === 'ighd-scan') {
       scanEmbedded();
       send({
@@ -351,6 +458,9 @@
       });
     } else if (e.data?.source === 'ighd-log' && typeof e.data.text === 'string') {
       slog(e.data.text);
+    } else if (e.data?.source === 'ighd-music-status-result'
+      && typeof e.data.text === 'string') {
+      console.log(`IG Tools music focus: ${e.data.text}`);
     } else if (e.data?.source === 'ighd-load-post' && typeof e.data.code === 'string') {
       const result = await loadPostDetails(e.data.code);
       send({ source: 'ighd-load-post-result', code: e.data.code, ...result });
@@ -361,6 +471,7 @@
   window.igtSongStatus = () => {
     console.log(`site API headers seen: ${!!apiHeaders}`);
     console.log(songLog.join('\n') || '(no events yet)');
+    send({ source: 'ighd-music-status' });
     return songLog.length;
   };
 

@@ -13,6 +13,7 @@
   const DENSE_FPS = 30;
 
   function readBoxes(view, start, end, parents, out) {
+    if (parents.length > 16) throw new Error('MP4 nesting limit');
     let pos = start;
     while (pos + 8 <= end) {
       let size = view.getUint32(pos);
@@ -21,6 +22,7 @@
       );
       let header = 8;
       if (size === 1) {
+        if (pos + 16 > end) break;
         size = Number(view.getBigUint64(pos + 8));
         header = 16;
       } else if (size === 0) {
@@ -28,6 +30,7 @@
       }
       if (size < header || pos + size > end) break;
       const box = { type, pos, size, header, parents };
+      if (out.length >= 10000) throw new Error('MP4 box limit');
       out.push(box);
       if (CONTAINERS.has(type)) readBoxes(view, pos + header, pos + size, [...parents, box], out);
       pos += size;
@@ -62,7 +65,9 @@
     // Find the video track.
     let stts = null;
     let timescale = 0;
-    for (const trak of boxes.filter((b) => b.type === 'trak')) {
+    const tracks = boxes.filter((b) => b.type === 'trak');
+    if (tracks.length > 32) return null;
+    for (const trak of tracks) {
       const mdia = child(boxes, trak, 'mdia');
       const hdlr = mdia && child(boxes, mdia, 'hdlr');
       if (!hdlr || view.getUint32(hdlr.pos + hdlr.header + 8) !== 0x76696465) continue; // 'vide'
@@ -78,6 +83,7 @@
 
     // Current timing.
     const n = view.getUint32(stts.pos + stts.header + 4);
+    if (n > 100000 || stts.header + 8 + n * 8 > stts.size) return null;
     let frames = 0;
     let total = 0;
     for (let i = 0; i < n; i++) {
@@ -122,6 +128,8 @@
       for (const b of readBoxes(ov, 0, out.length, [], [])) {
         if (b.type !== 'stco' && b.type !== 'co64') continue;
         const count = ov.getUint32(b.pos + b.header + 4);
+        const stride = b.type === 'stco' ? 4 : 8;
+        if (count > 100000 || b.header + 8 + count * stride > b.size) return null;
         for (let i = 0; i < count; i++) {
           if (b.type === 'stco') {
             const at = b.pos + b.header + 8 + i * 4;

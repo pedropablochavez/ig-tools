@@ -134,6 +134,19 @@
 }
 #ighd-toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+/* Audio credits in the author column, above recommendation / location subtitles. */
+.ighd-audio-details {
+  display: block;
+  min-width: 0;
+  max-width: min(320px, 52vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  font: 400 12px/18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  text-align: start;
+}
+
 /* Music controls floating on top of a photo post (no background, like the mobile app) */
 .ighd-music-wrap {
   position: absolute;
