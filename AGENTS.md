@@ -40,6 +40,28 @@ Messages between worlds are checked with `fromPage(e)` (same window + same origi
 - Logged-out testing is limited (login wall hides carousels, no music fields). Ask the owner for
   console output (`igtSongStatus()`) or to connect a browser tool if you need the logged-in view.
 
+## Installation website redesign (2026-10-22)
+
+Owner requested the `design-taste-frontend` and `web-design-guidelines` skills. The Pages site now
+uses the Product performs direction (seed 1331020704), dark neutral surfaces and a bronze download
+action. Four cropped screenshots show actual bundled controls on the existing fictional demo.
+`scripts/prepare_site_assets.ps1` reproduces these crops; `SITE_DESIGN.md` records the direction,
+critique, intentional imagery limitations and review. The UI is still English and unofficial.
+
+The preview switches between photo-post music and the profile viewer without playing sound.
+Browser / preview choices can be shared in query parameters. Browser detection is local, with no
+telemetry. Finite entrances respect reduced motion and finish when the tab hides; no polling,
+frameworks, remote fonts, third-party assets or extension runtime changes were added.
+
+The main CTA remains a ZIP download with manual installation and manual-update instructions.
+No store account was registered or paid for; `distribution.json` still has a null store URL.
+The owner is considering GitHub-only distribution. Do not imply a store listing exists.
+
+Validation: skill lint 0 FAIL / 0 WARN; Edge inspection at 1440 / 768 / 390 CSS pixels 0 FAIL /
+2 intentional imagery WARNs; 45 browser checks including keyboard, clipboard fallback, deep links,
+privacy layout, no-JS and reduced motion; 70 extension regressions pass. Clipboard success and the
+future store flow were tested with temporary fixtures only. Website assets remain outside the ZIP.
+
 ## Installation website and store kit (v2.3.3)
 
 Owner requested a GitHub Pages installation page, then confirmed they have no Chrome Web Store
