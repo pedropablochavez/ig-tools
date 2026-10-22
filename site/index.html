@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IG Tools (Unofficial) — A little more from your feed</title>
+  <meta name="description" content="Full-size profile photos, original-quality downloads and music for photo posts. A free, unofficial desktop browser extension. No tracking.">
+  <meta name="theme-color" content="#f5f7f3">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <link rel="icon" href="assets/icon128.png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar shell">
+    <a class="brand" href="./" aria-label="IG Tools home"><img src="assets/icon128.png" width="36" height="36" alt=""><span>IG Tools<small>UNOFFICIAL</small></span></a>
+    <nav aria-label="Main navigation"><a href="#features">Features</a><a href="#install">Install</a><a href="https://github.com/pedropablochavez/ig-tools">GitHub <span aria-hidden="true">↗</span></a></nav>
+  </header>
+  <main id="main">
+    <section class="hero shell">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="status-dot"></span> SMALL TOOLS. A BETTER SCROLL.</p>
+        <h1>Your feed.<br>A little more <em>useful.</em></h1>
+        <p class="intro">See photos in full size. Save the post you love. Hear the music that belongs with it.</p>
+        <p class="subintro">A free, open-source companion for instagram.com on your desktop.</p>
+        <div class="hero-actions"><a class="button primary" data-install-link href="downloads/ig-tools.zip" download>Download extension <span aria-hidden="true">↓</span></a><a class="text-link" href="#install">How to install <span aria-hidden="true">↗</span></a></div>
+        <p class="install-note" data-install-note>Manual install · Brave, Chrome &amp; Edge · <span data-version></span></p>
+        <p class="mobile-note" hidden>Install this extension from a desktop browser.</p>
+        <div class="trust-line"><span>✓ No tracking</span><span>✓ No account to create</span><span>✓ Open source</span></div>
+      </div>
+      <div class="preview" aria-label="Illustrative feature preview with sample content">
+        <div class="preview-top"><span><i></i><i></i><i></i></span><span>JUST A LITTLE MORE POSSIBILITY</span></div>
+        <div class="sample-post">
+          <div class="sample-header"><div class="avatar" aria-hidden="true">s</div><div><strong>sample.creator</strong><span class="sample-song">♫ Daylight · Sample artist</span></div><span class="sample-more" aria-hidden="true">•••</span></div>
+          <div class="landscape"><img src="assets/landscape.svg" width="600" height="500" alt="Illustrated sunlit mountains and a quiet lake"><span class="photo-tag">A little closer to the moment.</span><span class="music-bubble" aria-hidden="true">♫</span></div>
+          <div class="sample-actions" aria-hidden="true"><span>♡</span><span>○</span><span>↗</span><span class="sample-download">↓</span><span class="sample-bookmark">▱</span></div>
+          <p class="sample-caption"><strong>sample.creator</strong> A view worth keeping.</p>
+        </div>
+        <div class="floating-label"><span class="label-icon" aria-hidden="true">↙</span><div><strong>The original, please.</strong><span>Save the photo you're looking at.</span></div><span class="label-check" aria-hidden="true">✓</span></div>
+        <span class="preview-footnote">Illustrative preview · sample content</span>
+      </div>
+    </section>
+    <section class="features shell" id="features" aria-labelledby="features-heading">
+      <div class="section-heading"><p class="eyebrow">MADE FOR THE LITTLE THINGS</p><h2 id="features-heading">Less friction. More of what you came for.</h2></div>
+      <div class="feature-grid">
+        <article><span class="feature-icon" aria-hidden="true">↗</span><h3>See the bigger picture.</h3><p>Open profile photos in full size. View, open or download the best version the page provides.</p></article>
+        <article><span class="feature-icon" aria-hidden="true">↓</span><h3>Keep the right moment.</h3><p>Save photos, videos and stories. On a carousel, download the slide you're actually viewing.</p></article>
+        <article><span class="feature-icon" aria-hidden="true">♫</span><h3>Let the photo play.</h3><p>Hear a photo post's music automatically, see its credits and let the next post take over as you scroll.</p></article>
+      </div>
+    </section>
+    <section class="install-section" id="install" aria-labelledby="install-heading"><div class="shell">
+      <div class="install-heading"><div><p class="eyebrow">YOUR NEXT SCROLL STARTS HERE</p><h2 id="install-heading">A few steps. Then you're in.</h2><p id="install-method">Available now as a manual download. Store installation is not available yet.</p></div><a class="button primary" data-install-link href="downloads/ig-tools.zip" download>Download extension <span aria-hidden="true">↓</span></a></div>
+      <div class="browser-picker" role="group" aria-label="Choose your browser"><span>Your browser</span><button type="button" data-browser="brave" aria-pressed="true">Brave</button><button type="button" data-browser="chrome" aria-pressed="false">Chrome</button><button type="button" data-browser="edge" aria-pressed="false">Edge</button></div>
+      <div class="steps">
+        <article><span class="step-number">01</span><h3>Download &amp; unzip.</h3><p>Download the ZIP above and extract it to a permanent folder. Keep that folder after installation.</p><span class="step-detail"><span data-version></span> · <span data-zip-size>Small ZIP download</span></span></article>
+        <article><span class="step-number">02</span><h3>Open your extensions.</h3><p>Copy this address and paste it into your browser's address bar.</p><div class="copy-field"><code id="extensions-address">brave://extensions</code><button type="button" id="copy-address" aria-label="Copy extensions address">Copy</button></div><span class="copy-status" role="status" aria-live="polite"></span></article>
+        <article><span class="step-number">03</span><h3>Load it. You're ready.</h3><p>Enable <strong>Developer mode</strong>, click <strong>Load unpacked</strong> and choose the extracted folder containing <code>manifest.json</code>. Reload Instagram.</p></article>
+      </div>
+      <p class="compatibility">Desktop only · Chromium 116 or newer · No browser restart needed</p>
+    </div></section>
+    <section class="privacy-strip shell"><div><p class="eyebrow">YOUR BROWSER. YOUR BUSINESS.</p><h2>Useful tools.<br>No tracking attached.</h2></div><div><p>No analytics, ads or developer servers. The extension works with media the site provides to your browser. Photos, videos and music load from the original media servers.</p><p>Music and downloads use data. Temporary caches have limits, and playback stops when you leave the post or hide the tab.</p><a class="text-link" href="privacy.html">Read the privacy policy <span aria-hidden="true">↗</span></a></div></section>
+    <section class="faq shell" aria-labelledby="faq-heading"><h2 id="faq-heading">Good to know.</h2><details><summary>Why do I need Developer mode?</summary><p>This version is distributed as an unpacked extension. A normal website cannot directly install it. Once there is a Chrome Web Store listing, this page can link to the browser's standard installation flow, which also works in Brave.</p></details><details><summary>Does it work with private accounts?</summary><p>Only with content that your own session can already access. It does not unlock private accounts or bypass access restrictions.</p></details><details><summary>How do I update or remove it?</summary><p>For an update, replace the files in your existing installation folder with the new ZIP contents, click Reload on the extension card and refresh Instagram. To uninstall, click Remove on that card.</p></details><details><summary>Is this an official Instagram extension?</summary><p>No. IG Tools is an independent, unofficial project. It is not affiliated with, endorsed by or sponsored by Instagram or Meta. Use downloaded content responsibly and respect its owners' rights.</p></details></section>
+  </main>
+  <footer class="shell footer"><div class="footer-main"><a class="brand" href="./"><img src="assets/icon128.png" width="30" height="30" alt=""><span>IG Tools<small>UNOFFICIAL</small></span></a><span>Small tools. Open source. Yours to use.</span><div><a href="privacy.html">Privacy</a><a href="https://github.com/pedropablochavez/ig-tools/issues">Support</a><a href="https://github.com/pedropablochavez/ig-tools">Source ↗</a></div></div><p>Not affiliated with Instagram or Meta. Instagram is a trademark of Meta Platforms, Inc. Respect copyright, privacy and the site's terms. <span>This website is hosted on GitHub Pages.</span></p></footer>
+</body>
+</html>

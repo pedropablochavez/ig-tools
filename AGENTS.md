@@ -40,6 +40,38 @@ Messages between worlds are checked with `fromPage(e)` (same window + same origi
 - Logged-out testing is limited (login wall hides carousels, no music fields). Ask the owner for
   console output (`igtSongStatus()`) or to connect a browser tool if you need the logged-in view.
 
+## Installation website and store kit (v2.3.3)
+
+Owner requested a GitHub Pages installation page, then confirmed they have no Chrome Web Store
+developer account and asked to prepare what is needed to publish. A website cannot silently install
+the extension; the standard confirmed flow requires a store listing. Do not fake an install button,
+invent a listing ID, pay registration fees or accept Google's developer agreement on their behalf.
+
+`scripts/build_distribution.py` (stdlib Python) creates a minimal runtime ZIP, a checksum and a
+self-contained `dist/site/`. It generates the public privacy page from PRIVACY.md plus an accurate
+website-hosting disclosure. `site/` has responsive English UI, browser-specific manual instructions,
+no analytics / external assets / backend, and a same-origin packaged ZIP download. GitHub Pages hosts
+the site; extension media never goes there. `distribution.json` keeps the Chrome Web Store URL null
+until the owner has a real approved listing. Setting it switches the main CTA to the store.
+
+`.github/workflows/pages.yml` tests, builds and deploys main pushes using official GitHub actions.
+Generated ZIPs / site output stay in ignored dist/, never in the extension or source history.
+`store/LISTING.md` contains submission copy, permission explanations and reviewer steps;
+`store/PUBLISHING.md` describes remaining owner account / review steps. `store/assets/` has original
+promotional art and labeled fictional demos showing the actual bundled content-script UI, not private
+user screenshots. `scripts/prepare_store_assets.py` reproduces them with a headless browser and a
+separate temporary profile. No real account or media is used.
+
+The manifest description was 164 characters; shortened to 119 for the store's 132-character limit,
+and homepage_url points to the public Pages site. Extension behavior / permissions stay as v2.3.2.
+
+Validation: 70 extension tests pass, the ZIP contains 14 expected runtime / policy / license files,
+and the generated site has no missing local links. Browser smoke checks passed for manual desktop,
+390px mobile and a fixture-only future store CTA (ten checks each, clipboard simulated). Desktop /
+mobile layouts and all three PNG store graphics were visually inspected. Image dimensions match
+the store's documented 440×280 and 1280×800 requirements. The public site remains manual-only until
+the owner supplies a real store listing URL; no Google account has been registered or paid for.
+
 ## Resource review (v2.3.2)
 
 The owner confirmed v2.3.1 works ("Todo perfecto"), then requested a data / memory / stability review

@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "IG Tools (Unofficial)",
-  "version": "2.3.2",
+  "version": "2.3.3",
   "minimum_chrome_version": "116",
-  "description": "Unofficial. View profile pictures in full size and download posts, videos and stories, and play the music of photo posts on instagram.com. Not affiliated with Meta.",
+  "description": "View full-size profile photos, save posts and stories, and hear photo-post music. Unofficial; not affiliated with Meta.",
+  "homepage_url": "https://pedropablochavez.github.io/ig-tools/",
   "permissions": [
     "downloads",
     "offscreen"

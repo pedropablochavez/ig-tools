@@ -38,11 +38,19 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
   8 MiB. Larger or unknown-size stories are downloaded unchanged.
 - No third-party websites, no ads, no copy-pasting links.
 
-## Install (developer mode)
+## Install
+
+Visit the [installation website](https://pedropablochavez.github.io/ig-tools/) for a small extension-only
+ZIP, browser-specific instructions and privacy policy. The site currently offers **manual installation**.
+Once an approved Chrome Web Store listing is linked, its main button will open the store's normal
+confirmed install flow, including in Brave. The extension has not been submitted to the store yet.
+
+### Manual installation
 
 Requires a Chromium-based browser using Chromium 116 or newer.
 
-1. Download this repository (**Code → Download ZIP**) and unzip it, or `git clone` it.
+1. Download the extension ZIP from the installation website and unzip it to a permanent folder, or
+   clone this repository. The installable ZIP has `manifest.json` directly at its root.
 2. Open `brave://extensions` (or `chrome://extensions`).
 3. Turn on **Developer mode**.
 4. Click **Load unpacked** and select the folder that contains `manifest.json`.
@@ -82,6 +90,19 @@ It only works with content the site itself already sent to your browser, so it c
 could not already see, and it does not bypass private accounts or any other access restriction. Profile
 pictures are publicly visible on Instagram, and the official mobile app already lets you view them in a
 larger size.
+
+## Website and store distribution
+
+Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.3.3.zip` and
+`dist/site/`. The package contains only extension runtime assets, the license and privacy policy.
+The GitHub Pages workflow builds this same ZIP and deploys the static site on main pushes. The
+website has no analytics, third-party fonts or scripts, and no backend. GitHub serves the public site
+and download, under its own hosting privacy policy.
+
+Store submission text, original sample graphics and the remaining account steps are in
+[store/PUBLISHING.md](store/PUBLISHING.md). Set the real published store URL in `distribution.json`
+after approval; the site then switches its primary CTA. No account, fee, agreement acceptance or
+Chrome Web Store publication has been performed by the build scripts.
 
 ## Privacy
 
