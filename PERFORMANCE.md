@@ -11,9 +11,10 @@ design and a regression check, not a guarantee against browser, driver or operat
 | Profile, post and story caches | 500 recent entries each; evicted post data may be loaded again on revisit |
 | Request history / diagnostics | 2,000 recent lookup codes; 200 deduplicated logs, 60 displayed log lines, 200 music-field records, 1,000 recent profile-stat usernames |
 | Own post-detail requests | One active request per tab; at most six active / queued jobs, duplicates share a job |
-| Automatic lookup scheduling | Only visible connected posts; up to five candidates; stale / hidden candidates are dropped |
+| Automatic lookup scheduling | Posts on screen or up to one screen below; closest first; up to five candidates; far / stale / hidden candidates are dropped and may be asked again; at most 20 look-ahead and 30 total lookups per rolling minute |
 | Request timeout | Eight seconds for a detail fetch / response reader; content waiters remove themselves after ten seconds |
 | HTTP 429 | Respect Retry-After with a cooldown between one and fifteen minutes; no automatic retry loop |
+| Block / verification answers | checkpoint, feedback_required, challenge, "try again later", redirects or HTML pages stop own requests for fifteen minutes |
 | Passive fetch inspection | At most two concurrent response copies, up to 4 MiB each; the site's original response stays readable |
 | JSON processing | Oversized embedded / XHR text is skipped above 4,194,304 code units; 20,000 node / field visits per response and 100 newline-delimited documents |
 | Ordinary video download | Direct browser download; no full-file copy in the tab |

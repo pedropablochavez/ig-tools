@@ -87,11 +87,14 @@ the page loads the full-size picture data the extension reads.
 ## How it works
 
 The extension uses the media data the site loads while you browse. Downloads and music playback load
-the selected media file directly from the site's media servers. For a post you stop on (or download)
-whose song or full video file the feed did not include, it asks the site for that post's details, the
-same request the site makes when you open the post. One post at a time, with recent lookups deduplicated.
+the selected media file directly from the site's media servers. For a photo post on or just below the
+screen (or one you download) whose song or full video file the feed did not include, it asks the site
+for that post's details, the same request the site makes when you open the post, so the song is ready
+when you reach it. One post at a time, closest to the screen first, with recent lookups deduplicated.
 Caches retain up to 500 recent profiles, posts and story items each; an evicted post can be loaded
-again when revisited. Requests time out and back off after HTTP 429. Large response copies are skipped
+again when revisited. Automatic lookups are capped per minute (20 ahead of the screen, 30 in total),
+requests time out, and the extension stops its own requests after HTTP 429 (1–15 minutes) or for 15
+minutes after a block, verification or "try again later" answer, with no automatic retry. Large response copies are skipped
 without affecting the website's original response.
 
 - `intercept.js` runs in the page and reads the responses the site **already downloads for you** while you
@@ -124,7 +127,7 @@ larger size.
 
 ## Website and store distribution
 
-Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.6.1.zip` and
+Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.6.2.zip` and
 `dist/site/`. The package contains only extension runtime assets, the license and privacy policy.
 The GitHub Pages workflow builds this same ZIP and deploys the static site on main pushes. The
 website has no analytics, third-party fonts or scripts, and no backend. GitHub serves the public site

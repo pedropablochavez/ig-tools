@@ -230,7 +230,7 @@
       if (evicted) detailsTried.delete(evicted); // revisiting an evicted post may reload its data
       if (m.music || m.audio) credits = true;
     }
-    if (credits) queueScan();
+    if (credits) scanSoon(); // show ♪ and the credits right away, not after the usual debounce
   });
 
   // A real video file beats a still image, which beats nothing.
@@ -928,15 +928,21 @@
   }
 
   // ---------- Finding the song of feed posts ----------
-  // The feed data often has no song for a post. When you stop on a photo post (or point at it),
-  // intercept.js asks the site for that post's details, the same request the site makes when you
-  // open the post; the answer includes the song. One post at a time, with recent lookups
-  // deduplicated. Revisiting an evicted post can reload its details.
+  // The feed data often has no song for a post. When a photo post comes near the screen (up to one
+  // screen below it) or you point at it, intercept.js asks the site for that post's details, the
+  // same request the site makes when you open the post; the answer includes the song. Asking ahead
+  // means the song is usually known before the post fills the screen. One post at a time, closest
+  // to the screen first, with recent lookups deduplicated. Revisiting an evicted post can reload it.
 
   const detailsTried = new Set();
   const detailsQueue = [];
   let detailsBusy = false;
-  const dwellTimers = new WeakMap();
+  // Lookup budget per rolling minute: posts ahead of the screen only while below AHEAD_PER_MINUTE,
+  // the post on screen up to LOOKUPS_PER_MINUTE; above that, wait until the minute frees up.
+  const AHEAD_PER_MINUTE = 20;
+  const LOOKUPS_PER_MINUTE = 30;
+  const recentLookups = [];
+  let budgetTimer = null;
 
   const logged = new Set();
   function songLog(text) {
@@ -945,24 +951,19 @@
     window.postMessage({ source: 'ighd-log', text: `feed: ${text}` }, location.origin);
   }
 
-  const prefetchObserver = new IntersectionObserver((entries) => {
+  function prefetchEntries(entries) {
     if (document.hidden) return;
-    for (const e of entries) {
-      const scope = e.target;
-      const available = viewportArea(scope.getBoundingClientRect());
-      if (available > 0 && visibleArea(scope, null) / available >= 0.6) {
-        if (!dwellTimers.has(scope)) {
-          dwellTimers.set(scope, setTimeout(() => {
-            dwellTimers.delete(scope);
-            requestPrefetch(scope);
-          }, 400));
-        }
-      } else {
-        clearTimeout(dwellTimers.get(scope));
-        dwellTimers.delete(scope);
-      }
-    }
-  }, { threshold: Array.from({ length: 21 }, (_, i) => i / 20) });
+    for (const e of entries) if (e.isIntersecting) requestPrefetch(e.target);
+  }
+  const prefetchObserver = new IntersectionObserver(prefetchEntries, { rootMargin: '0px 0px 100% 0px' });
+  // A post held back by the budget may go first once it reaches the screen.
+  const onScreenObserver = new IntersectionObserver(prefetchEntries);
+
+  // How far a post is from the screen: 0 while on screen, otherwise the gap in pixels.
+  function screenDistance(scope) {
+    const r = scope.getBoundingClientRect();
+    return r.bottom <= 0 ? -r.bottom : Math.max(0, r.top - innerHeight);
+  }
 
   // Asks the site for a post's full details (song, full video files). Resolves when answered.
   const detailsWaiters = new Map();
@@ -1000,22 +1001,48 @@
     if (post?.music) return;
     if (post && post.items.every((it) => it.type === 'video')) return; // has its own sound
     if (!post && scope.querySelector('video')) return; // a reel or video: has its own sound
-    if (detailsTried.has(code)) return;
+    if (detailsTried.has(code)) { runPrefetch(); return; }
     remember(detailsTried, code, null, 2000);
     songLog(`post ${code}: asking for its details`);
     detailsQueue.push({ code, scope });
-    if (detailsQueue.length > 5) detailsQueue.shift();
+    if (detailsQueue.length > 5) detailsTried.delete(detailsQueue.shift().code);
     runPrefetch();
   }
 
   async function runPrefetch() {
     if (detailsBusy || !detailsQueue.length) return;
-    if (document.hidden) { detailsQueue.length = 0; return; }
-    const next = detailsQueue.pop();
-    if (!next.scope.isConnected || codeFor(next.scope.__igtGroup) !== next.code
-      || visibleArea(next.scope, null) <= 0) { runPrefetch(); return; }
+    if (document.hidden) {
+      for (const job of detailsQueue.splice(0)) detailsTried.delete(job.code);
+      return;
+    }
+    const now = Date.now();
+    while (recentLookups.length && recentLookups[0] <= now - 60000) recentLookups.shift();
+    const maxDistance = recentLookups.length >= LOOKUPS_PER_MINUTE ? -1
+      : recentLookups.length >= AHEAD_PER_MINUTE ? 0 : innerHeight;
+    // The post on screen first, then the one coming next. Posts that were scrolled far away
+    // are dropped and may be asked for again when they come back near the screen.
+    let next = null;
+    let nextDistance = Infinity;
+    for (const job of detailsQueue.splice(0)) {
+      const distance = job.scope.isConnected && codeFor(job.scope.__igtGroup) === job.code
+        ? screenDistance(job.scope) : Infinity;
+      if (distance > innerHeight) detailsTried.delete(job.code);
+      else if (distance <= maxDistance && distance < nextDistance) {
+        if (next) detailsQueue.push(next);
+        next = job;
+        nextDistance = distance;
+      } else detailsQueue.push(job);
+    }
+    if (!next) {
+      // Over budget: look again once the oldest lookup leaves the one-minute window.
+      if (detailsQueue.length && !budgetTimer) {
+        budgetTimer = setTimeout(() => { budgetTimer = null; runPrefetch(); }, recentLookups[0] + 60000 - now);
+      }
+      return;
+    }
+    recentLookups.push(now);
     detailsBusy = true;
-    await loadPostDetails(next.code); // the post you stopped on most recently first
+    await loadPostDetails(next.code);
     setTimeout(() => {
       detailsBusy = false;
       runPrefetch();
@@ -1040,6 +1067,7 @@
     if (watchedPosts.has(scope)) return;
     watchedPosts.add(scope);
     prefetchObserver.observe(scope);
+    onScreenObserver.observe(scope);
   }
 
   // The box that shows the post's photo (the carousel window for carousels): the highest
@@ -1211,8 +1239,7 @@
     for (const scope of watchedPosts) {
       if (scope.isConnected) continue;
       prefetchObserver.unobserve(scope);
-      clearTimeout(dwellTimers.get(scope));
-      dwellTimers.delete(scope);
+      onScreenObserver.unobserve(scope);
       watchedPosts.delete(scope);
       musicPosts.delete(scope);
     }
@@ -1236,14 +1263,23 @@
   }
 
   let scanQueued = false;
+  let scanTimer = null;
+  function runScan() {
+    scanQueued = false;
+    if (document.hidden) return;
+    addPostButtons();
+  }
   function queueScan() {
     if (document.hidden || scanQueued) return;
     scanQueued = true;
-    setTimeout(() => {
-      scanQueued = false;
-      if (document.hidden) return;
-      addPostButtons();
-    }, 400);
+    scanTimer = setTimeout(runScan, 400);
+  }
+  // A song just arrived: replaces a pending debounced scan instead of adding another one.
+  function scanSoon() {
+    if (document.hidden) return;
+    clearTimeout(scanTimer);
+    scanQueued = true;
+    scanTimer = setTimeout(runScan, 0);
   }
   new MutationObserver(queueScan).observe(document.body, { childList: true, subtree: true });
   window.addEventListener('scroll', queueScan, { passive: true });

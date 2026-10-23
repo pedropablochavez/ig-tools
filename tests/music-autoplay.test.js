@@ -9,7 +9,7 @@ const path = require('node:path');
 const source = readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
 const music = source.slice(source.indexOf('  const MUSIC_ICON'), source.indexOf('  // Hovering a post'));
 const visibility = source.slice(source.indexOf('  function visibleArea('), source.indexOf('  // Index from the carousel'));
-const prefetch = source.slice(source.indexOf('  const prefetchObserver'), source.indexOf('  // Asks the site'));
+const prefetch = source.slice(source.indexOf('  function prefetchEntries('), source.indexOf('  // Asks the site'));
 const watch = source.slice(source.indexOf('  function watchPost('), source.indexOf('  // The box that shows'));
 
 function events(target = {}) {
@@ -266,12 +266,101 @@ test('photo observer changes update focus without an explicit scroll', async () 
   assert.equal(h.player.calls, 1);
 });
 
-test('tall posts can request missing songs after dwelling in view', () => {
-  const h = harness(); const b = h.add('Tall', 0, 1800);
-  h.observers[1]([{ target: b.box, intersectionRatio: 1000 / 1800 }]);
-  assert.equal(h.dwell.size, 1);
-  for (const done of [...h.dwell.values()]) done();
-  assert.deepEqual(h.prefetched, [b.box]);
+test('posts ask for their song as soon as they come near the screen, without dwelling', () => {
+  const h = harness(); const a = h.add('Near', 1200); const b = h.add('Far', 3000);
+  h.observers[1]([{ target: a.box, isIntersecting: true }, { target: b.box, isIntersecting: false }]);
+  assert.equal(h.dwell.size, 0, 'no waiting timer');
+  assert.deepEqual(h.prefetched, [a.box]);
+});
+
+// The details queue: the post on screen first, then the next one; far posts can be asked again.
+function detailsHarness() {
+  const remember = source.slice(source.indexOf('  function remember('), source.indexOf('  // ---------- Data ----------'));
+  const distance = source.slice(source.indexOf('  // How far a post is'), source.indexOf('  // Asks the site'));
+  const state = source.slice(source.indexOf('  let detailsBusy = false;'), source.indexOf('  const logged = new Set();'));
+  const queue = source.slice(source.indexOf('  function requestPrefetch('), source.indexOf('  function watchPost('));
+  const requested = [];
+  const later = [];
+  const clock = { now: 0 };
+  const context = vm.createContext({
+    document: { hidden: false }, innerHeight: 1000, mediaByCode: new Map(), songLog() {},
+    codeFor: (group) => group.code, Date: { now: () => clock.now },
+    setTimeout: (fn, ms) => later.push(Object.assign(fn, { ms })),
+    loadPostDetails: (code) => { requested.push(code); return Promise.resolve({ ok: true }); }
+  });
+  const api = vm.runInContext(`${remember}
+    const detailsTried = new Set(); const detailsQueue = [];
+    ${state}\n${distance}\n${queue}\n({ requestPrefetch, detailsTried });`, context);
+  const post = (code, top) => ({ isConnected: true, __igtGroup: { code }, querySelector: () => null,
+    getBoundingClientRect: () => ({ top, bottom: top + 800 }) });
+  // Runs the 800 ms gap after a lookup, leaving any budget retry timer in place.
+  const next = async () => { await settle(); later.splice(later.findIndex((fn) => fn.ms === 800), 1)[0](); };
+  return { ...api, post, requested, next, later, clock };
+}
+
+test('the lookup budget keeps fast scrolling to the post on screen, then waits for the minute', async () => {
+  const h = detailsHarness();
+  for (let i = 0; i < 20; i++) { h.requestPrefetch(h.post(`Ahead${i}`, 1300)); await h.next(); }
+  assert.equal(h.requested.length, 20);
+  const held = h.post('Held', 1300);
+  h.requestPrefetch(held);
+  assert.equal(h.requested.length, 20, 'no more look-ahead after 20 lookups in a minute');
+  for (let i = 0; i < 10; i++) { h.requestPrefetch(h.post(`Screen${i}`, 0)); await h.next(); }
+  assert.equal(h.requested.length, 30, 'the post on screen is still looked up');
+  held.getBoundingClientRect = () => ({ top: 0, bottom: 800 });
+  h.requestPrefetch(held); // reaches the screen, but the minute is full
+  assert.equal(h.requested.length, 30);
+  assert.equal(h.later.length, 1);
+  assert.equal(h.later[0].ms, 60000);
+  h.clock.now = 60000;
+  h.later.shift()();
+  assert.deepEqual(h.requested.slice(-1), ['Held']);
+});
+
+test('song lookups go to the post on screen before the one ahead', async () => {
+  const h = detailsHarness();
+  const onScreen = h.post('OnScreen', 100); const ahead = h.post('Ahead', 1300);
+  h.requestPrefetch(h.post('First', 0));
+  h.requestPrefetch(ahead); h.requestPrefetch(onScreen);
+  assert.deepEqual(h.requested, ['First'], 'one request at a time');
+  await h.next();
+  assert.deepEqual(h.requested, ['First', 'OnScreen']);
+  await h.next();
+  assert.deepEqual(h.requested, ['First', 'OnScreen', 'Ahead']);
+});
+
+test('a queued post scrolled far away is dropped and can be asked for again', async () => {
+  const h = detailsHarness();
+  const passed = h.post('Passed', 1300);
+  h.requestPrefetch(h.post('First', 0)); h.requestPrefetch(passed);
+  passed.getBoundingClientRect = () => ({ top: -3000, bottom: -2200 });
+  await h.next();
+  assert.deepEqual(h.requested, ['First']);
+  assert.equal(h.detailsTried.has('Passed'), false);
+  passed.getBoundingClientRect = () => ({ top: 1300, bottom: 2100 });
+  h.requestPrefetch(passed);
+  await h.next();
+  assert.deepEqual(h.requested, ['First', 'Passed']);
+});
+
+test('a song arriving adds the ♪ button right away instead of after the scroll debounce', () => {
+  const scan = source.slice(source.indexOf('  let scanQueued'), source.indexOf('  new MutationObserver(queueScan)'));
+  const timers = [];
+  let scans = 0;
+  const context = vm.createContext({
+    document: { hidden: false }, addPostButtons: () => scans++,
+    setTimeout: (fn, ms) => { const t = { fn, ms }; timers.push(t); return t; },
+    clearTimeout: (t) => { const i = timers.indexOf(t); if (i >= 0) timers.splice(i, 1); }
+  });
+  const api = vm.runInContext(`${scan}\n({ queueScan, scanSoon });`, context);
+  api.queueScan();
+  assert.deepEqual(timers.map((t) => t.ms), [400]);
+  api.scanSoon();
+  assert.deepEqual(timers.map((t) => t.ms), [0], 'replaces the pending debounce');
+  timers.shift().fn();
+  assert.equal(scans, 1);
+  api.queueScan();
+  assert.deepEqual(timers.map((t) => t.ms), [400], 'normal debouncing continues afterwards');
 });
 
 test('focus diagnostic reports visibility and block state only to the same page', () => {

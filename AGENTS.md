@@ -276,6 +276,30 @@ as before. It replaced the per-post `userPaused` set that cleared when focus mov
 "manual pause carries over to later posts" in `tests/music-autoplay.test.js`. Not yet checked in
 the owner's Brave.
 
+## Faster song detection and lookup safety (v2.6.2, owner request)
+
+The owner reported waiting 0.5–1 s on each post before the song was detected, played and its
+credits shown. Causes: a 400 ms dwell at 60% visibility before asking for post details, the
+request itself, then the 400 ms scan debounce before ♪ / credits were added. Now `prefetchObserver`
+asks as soon as a photo post is on screen or within one screen below (`rootMargin` 100% bottom, no
+dwell), `runPrefetch` picks the queued post closest to the screen (`screenDistance`) and drops
+posts more than one screen away from `detailsTried` so they can be asked again, and a song arrival
+calls `scanSoon()` (0 ms, replacing the pending debounce). Still one request at a time with the
+800 ms gap, the 429 cooldown and dedup. Trade-off: posts flicked past within one screen may now be
+looked up too. Tests: four in `tests/music-autoplay.test.js`. The owner confirmed in Brave that it
+works ("funciona super bien").
+
+The owner then asked about ban risk; after the explanation they approved two safeguards. (1)
+`fetchPostDetails` checks `blockReason`: a `checkpoint` / `feedback_required` / `challenge` /
+"try again later" message (top-level JSON fields, any size if non-2xx, only answers under 64 KiB
+if 2xx so captions cannot trigger it), a redirect or an HTML page → 15-minute `coolDown`, no retry
+(same `BLOCKED` regex as the scan). (2) `runPrefetch` keeps a rolling one-minute budget:
+look-ahead lookups only while fewer than 20 happened in the last minute, the post on screen up to
+30, then a single `budgetTimer` retries when the oldest leaves the window. `onScreenObserver` (no
+margin) re-runs the queue when a held-back post reaches the screen. Tests: five in
+`tests/resource-usage.test.js`, one budget test in `tests/music-autoplay.test.js` (118 total).
+The safeguards were not observed in the browser (a real block cannot be provoked safely).
+
 ## Current playback behavior (v2.3.0): no-first-click playback confirmed by owner
 
 The owner reloaded the extension and Instagram, did not click in the page or on ♪, and confirmed:

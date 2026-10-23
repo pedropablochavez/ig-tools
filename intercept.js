@@ -435,10 +435,23 @@
     return job;
   }
 
-  // After a 429 (or a block / error during a list scan) no own request is made until this time.
+  // After a 429 or a block (or an error during a list scan) no own request is made until this time.
   let retryAfterUntil = 0;
   function coolDown(ms) {
     retryAfterUntil = Math.max(retryAfterUntil, Date.now() + Math.min(900000, Math.max(60000, ms || 0)));
+  }
+  const BLOCKED = /checkpoint|feedback_required|challenge|login_required|spam|rate limit|try again later|please wait/i;
+  // A block, checkpoint, "try again later" or login page instead of data: the reason, or ''.
+  function blockReason(res, text) {
+    if (res.redirected || /^\s*</.test(text)) return `HTTP ${res.status} page instead of data`;
+    let data = null;
+    // A normal answer is a large post object; only small or failed answers can be a block message.
+    if (!res.ok || text.length < 65536) {
+      try { data = JSON.parse(text.replace(/^\s*for\s*\(;;\);\s*/, '')); } catch (_) {}
+    }
+    const said = `${data?.message || ''} ${data?.error_type || ''} ${data?.spam ? 'spam' : ''}`.trim();
+    if (BLOCKED.test(said) || (res.status >= 400 && BLOCKED.test(text))) return `HTTP ${res.status} ${said}`.trim();
+    return '';
   }
   function noteRateLimit(res) {
     if (res.status !== 429) return;
@@ -482,6 +495,12 @@
       noteRateLimit(res);
       const text = await readResponseText(res);
       if (text == null) return { ok: false, status: res.status, reason: 'response limit' };
+      const blocked = blockReason(res, text);
+      if (blocked) {
+        coolDown(900000); // no own request for 15 minutes, no automatic retry
+        slog(`post ${code}: stopped, Instagram answered with a block (${blocked.slice(0, 120)})`);
+        return { ok: false, status: res.status, reason: 'blocked' };
+      }
       const found = handleText(text, { method: 'GET', url, body: null, headers });
       slog(`post ${code}: HTTP ${res.status}, ${found ? 'song found' : 'no song'}` +
         (res.ok ? '' : ` (${text.slice(0, 120).replace(/\s+/g, ' ')})`));
@@ -499,7 +518,6 @@
   // after you press Start; any 429, block or error ends the scan, with no automatic retry.
   const SCAN_PAGE_SIZE = 12;
   const SCAN_PAGE_LIMIT = 300;
-  const BLOCKED = /checkpoint|feedback_required|challenge|login_required|spam|rate limit|try again later|please wait/i;
   let scan = null;
 
   const routeUser = () => (location.pathname.split('/').filter(Boolean)[0] || '').toLowerCase();

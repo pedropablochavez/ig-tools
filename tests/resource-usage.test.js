@@ -100,6 +100,30 @@ test('HTTP 429 stops subsequent detail traffic during the cooldown', async () =>
   assert.equal(result.status, 429); assert.equal(calls, 1);
 });
 
+for (const [name, reply] of [
+  ['feedback_required', () => new Response(JSON.stringify({ message: 'feedback_required', status: 'fail' }), { status: 400 })],
+  ['checkpoint', () => new Response(JSON.stringify({ message: 'checkpoint_required', status: 'fail' }), { status: 400 })],
+  ['try again later (HTTP 200)', () => new Response(JSON.stringify({ message: 'Please wait a few minutes before you try again.', status: 'fail' }))],
+  ['a login page', () => new Response('<!DOCTYPE html><html></html>')]
+]) {
+  test(`a ${name} answer stops song lookups for 15 minutes without retrying`, async () => {
+    let calls = 0;
+    const h = interceptor(async () => { calls++; return reply(); });
+    assert.equal((await h.api.loadPostDetails('AAAAAAA')).reason, 'blocked');
+    assert.equal((await h.api.loadPostDetails('BBBBBBB')).reason, 'rate limit cooldown');
+    assert.equal(calls, 1);
+  });
+}
+
+test('a normal post answer mentioning a block word in its caption is not a block', async () => {
+  let calls = 0;
+  const post = { items: [{ ...photo, caption: { text: 'no spam, try again later' } }], status: 'ok' };
+  const h = interceptor(async () => { calls++; return new Response(JSON.stringify(post)); });
+  assert.equal((await h.api.loadPostDetails('AAAAAAA')).ok, true);
+  assert.equal((await h.api.loadPostDetails('BBBBBBB')).ok, true);
+  assert.equal(calls, 2);
+});
+
 test('passive inspection skips oversized declared responses and preserves the original', async () => {
   const original = new Response('original', { headers: { 'content-length': String(5 * 1024 * 1024) } });
   let clones = 0; original.clone = () => { clones++; throw Error('Should not clone'); };
@@ -243,13 +267,15 @@ test('detached posts and media are unobserved and released on a scan', () => {
   const unobserved = [];
   const context = vm.createContext({
     watchedPosts: new Set([scope]), observedMusicBoxes: new Set([box]), musicPosts: new Map([[scope, { box }]]),
-    dwellTimers: new WeakMap(), clearTimeout() {}, location: { pathname: '/stories/example/' },
-    prefetchObserver: { unobserve: (node) => unobserved.push(node) }, musicVisibility: { unobserve: (node) => unobserved.push(node) }
+    location: { pathname: '/stories/example/' },
+    prefetchObserver: { unobserve: (node) => unobserved.push(node) },
+    onScreenObserver: { unobserve: (node) => unobserved.push(node) },
+    musicVisibility: { unobserve: (node) => unobserved.push(node) }
   });
   vm.runInContext(`${between(content, '  function addPostButtons(', '  let scanQueued')}
     addPostButtons();`, context);
   assert.equal(context.watchedPosts.size, 0); assert.equal(context.observedMusicBoxes.size, 0);
-  assert.equal(context.musicPosts.size, 0); assert.equal(unobserved.length, 2);
+  assert.equal(context.musicPosts.size, 0); assert.equal(unobserved.length, 3);
 });
 
 function mp4Box(type, payload = Buffer.alloc(0)) {
