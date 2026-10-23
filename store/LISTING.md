@@ -10,7 +10,7 @@ Status: prepared for the owner's first submission; **not published or approved**
 - Homepage: https://pedropablochavez.github.io/ig-tools/
 - Privacy policy: https://pedropablochavez.github.io/ig-tools/privacy.html
 - Support: https://github.com/pedropablochavez/ig-tools/issues
-- Package: build with `python scripts/build_distribution.py`; upload `dist/ig-tools-v2.5.0.zip`
+- Package: build with `python scripts/build_distribution.py`; upload `dist/ig-tools-v2.5.1.zip`
 - Short description: use the current manifest description (119 characters, within the 132 limit).
 
 ## Detailed description

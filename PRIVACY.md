@@ -18,7 +18,9 @@
   website's own conversation request that asks Instagram to include that chat's theme. No other
   request is made and nothing else in the request changes. The theme's colors and background image
   (loaded from Instagram's media servers) are shown only in your tab and kept in memory for up to
-  200 recent conversations. Message contents are not read for this feature.
+  200 recent conversations. Message contents are not read for this feature. If Instagram answers that
+  request with an error, the extension stops setting the flag for 24 hours and stores only that retry
+  time in local storage on instagram.com.
 - **Internal audio player.** If a page requires a first click before playing sound, the extension may
   pass the selected audio URL, clip timing and volume to its own packaged offscreen document. Audio
   still loads directly from the site's media servers; no third-party service or embedded site is used.

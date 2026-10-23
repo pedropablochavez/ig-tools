@@ -1381,9 +1381,14 @@
 
   const themeStyle = document.createElement('style');
   themeStyle.id = 'ighd-chat-theme';
-  const BACKDROP_PROPS = ['backgroundColor', 'backgroundImage', 'backgroundSize', 'backgroundPosition'];
   const bubbleClasses = { out: null, in: null };
   let themed = null;
+
+  // Changes an inline style for the theme, remembering the site's value to put it back.
+  function setThemeStyle(el, prop, value) {
+    if (!themed.restore.some((r) => r.el === el && r.prop === prop)) themed.restore.push({ el, prop, value: el.style[prop] });
+    el.style[prop] = value;
+  }
 
   function themeVars(v) {
     const out = v.gradient_colors?.[0], inc = v.incoming_message_bubble_color;
@@ -1399,12 +1404,13 @@
     if (!themed) return;
     for (const name of Object.keys(themeVars({}))) themed.root.style.removeProperty(name);
     delete themed.root.dataset.ighdTheme;
-    for (const p of BACKDROP_PROPS) themed.backdrop.style[p] = themed.saved[p];
+    for (const r of themed.restore) r.el.style[r.prop] = r.value;
     themeStyle.remove();
     themed = null;
   }
 
-  // The conversation pane (around the message box) and its message list, the tallest scrolling area.
+  // The conversation pane (around the message box), its message list (the tallest scrolling area)
+  // and the composer's painted layers, innermost first: the rounded input, then the bar around it.
   function chatParts() {
     const box = document.querySelector('main [role="textbox"], [role="main"] [role="textbox"]');
     if (!box) return null;
@@ -1416,7 +1422,12 @@
       if (!/(auto|scroll)/.test(getComputedStyle(el).overflowY)) continue;
       list = el; best = el.clientHeight;
     }
-    return list && { root, list, backdrop: list.parentElement || list };
+    if (!list) return null;
+    const layers = [];
+    for (let e = box.parentElement; e && e !== root; e = e.parentElement) {
+      if (getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)') layers.push(e);
+    }
+    return { root, list, box, layers };
   }
 
   // Text colors have no variable: find the site's class that paints each bubble color, by giving
@@ -1476,20 +1487,29 @@
     const dark = html.classList.contains('__fb-dark-mode') || /dark/.test(getComputedStyle(html).colorScheme);
     const v = variants.find((x) => x.mode === (dark ? 'dark' : 'light')) || variants[0];
     const key = `${id}:${v.mode}`;
-    if (themed && (themed.key !== key || !themed.root.isConnected || !themed.list.isConnected)) clearChatTheme();
+    const stale = themed && [themed.root, themed.list, themed.box, ...themed.layers].some((el) => !el.isConnected);
+    if (themed && (themed.key !== key || stale)) clearChatTheme();
     if (!themed) {
       const parts = chatParts();
       if (!parts) return;
-      const saved = {};
-      for (const p of BACKDROP_PROPS) saved[p] = parts.backdrop.style[p];
-      themed = { key, ...parts, saved, divs: -1 };
+      themed = { key, ...parts, restore: [], divs: -1 };
       const vars = themeVars(v);
       for (const [name, value] of Object.entries(vars)) if (value) themed.root.style.setProperty(name, value);
       themed.root.dataset.ighdTheme = '';
+      // The background covers the whole pane, behind the messages and the message box.
       const image = themeImage(v.background || '');
       const color = argbCss(v.thread_background_color);
-      if (color) themed.backdrop.style.backgroundColor = color;
-      if (image) Object.assign(themed.backdrop.style, { backgroundImage: `url("${image}")`, backgroundSize: 'cover', backgroundPosition: 'center' });
+      if (color) setThemeStyle(themed.root, 'backgroundColor', color);
+      if (image) {
+        setThemeStyle(themed.root, 'backgroundImage', `url("${image}")`);
+        setThemeStyle(themed.root, 'backgroundSize', 'cover');
+        setThemeStyle(themed.root, 'backgroundPosition', 'center');
+      }
+      // The composer bar would otherwise remain a band of page color under the messages.
+      const [input, ...bars] = themed.layers;
+      const inputColor = argbCss(v.composer_input_background_color);
+      if (input && inputColor) setThemeStyle(input, 'backgroundColor', inputColor);
+      for (const bar of bars) setThemeStyle(bar, 'backgroundColor', 'transparent');
     }
     // Bubbles render after the pane; look again only when the list's content changed.
     const vars = themeVars(v);

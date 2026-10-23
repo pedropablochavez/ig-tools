@@ -22,7 +22,7 @@ const threadResponse = (key, theme) => ({ data: { get_slide_thread_nullable: { a
 const requestBody = (flag) => new URLSearchParams({ doc_id: '123', fb_api_req_friendly_name: 'Thread',
   variables: JSON.stringify({ thread_fbid: '999', [FLAG]: flag, other: 'a b' }) }).toString();
 
-function interceptor() {
+function interceptor({ storage = new Map(), fetchStatus = 200 } = {}) {
   const messages = [], fetched = [], listeners = [];
   class XHR {
     constructor() { this.loads = []; this.responseType = ''; this.responseText = '{}'; }
@@ -30,25 +30,27 @@ function interceptor() {
     open() {} setRequestHeader() {}
     send(body) { this.sent = body; }
   }
-  const window = { fetch: async (url, init) => { fetched.push(init?.body); return new Response('{}'); },
-    addEventListener: (type, fn) => listeners.push(fn), postMessage: (msg) => messages.push(msg) };
+  const window = { fetch: async (url, init) => { fetched.push(init?.body); return new Response('{}', { status: fetchStatus }); },
+    addEventListener: (type, fn) => listeners.push(fn), postMessage: (msg) => messages.push(msg),
+    localStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, String(v)) } };
   const context = vm.createContext({ window, XMLHttpRequest: XHR, URL, Request, Response, Headers,
     URLSearchParams, FormData, TextDecoder, AbortController, setTimeout, clearTimeout,
     document: { readyState: 'loading', cookie: '', addEventListener() {}, querySelectorAll: () => [] },
     sessionStorage: { getItem: () => null }, console: { log() {}, table() {} },
     location: { origin: 'https://www.instagram.com', href: 'https://www.instagram.com/', pathname: '/' } });
   vm.runInContext(read('intercept.js'), context);
-  const send = (body, response = {}) => {
+  const send = (body, response = {}, status = 200) => {
     const xhr = new XHR();
     xhr.open('POST', '/api/graphql');
     xhr.send(body);
-    xhr.responseText = JSON.stringify(response);
+    xhr.status = status;
+    xhr.responseText = typeof response === 'string' ? response : JSON.stringify(response);
     xhr.loads.forEach((fn) => fn());
     return xhr.sent;
   };
   const themes = () => plain(messages.filter((m) => m.source === 'ighd-themes').flatMap((m) => m.themes));
   const ask = (data) => listeners.forEach((fn) => fn({ source: window, origin: 'https://www.instagram.com', data }));
-  return { window, send, themes, fetched, messages, ask };
+  return { window, send, themes, fetched, messages, ask, storage };
 }
 
 test("the site's conversation request asks for the chat theme", () => {
@@ -154,7 +156,7 @@ class El {
     this.tagName = tag.toUpperCase(); this.kids = []; this.parentElement = null; this.style = new Style();
     this.dataset = {}; this.cls = []; this.text = opts.text || ''; this.offsetHeight = opts.h ?? 40;
     this.clientHeight = opts.h ?? 40; this.scrollHeight = opts.scroll ?? this.clientHeight;
-    this.overflowY = opts.overflowY || 'visible'; this.isRoot = false;
+    this.overflowY = opts.overflowY || 'visible'; this.isRoot = false; this.bg = opts.bg;
     if (opts.cls) this.cls = [opts.cls];
   }
   get classList() { const list = [...this.cls]; list.contains = (c) => this.cls.includes(c); return list; }
@@ -177,7 +179,7 @@ class El {
 }
 function computed(el, html) {
   if (el === html) return { colorScheme: html.scheme };
-  let bg = el.style.backgroundColor ? toRgb(el.style.backgroundColor) : 'rgba(0, 0, 0, 0)';
+  let bg = el.style.backgroundColor ? toRgb(el.style.backgroundColor) : el.bg || 'rgba(0, 0, 0, 0)';
   const cls = el.classList.find((c) => CLASS_VARS[c]);
   if (!el.style.backgroundColor && cls) bg = toRgb(el.inherited(CLASS_VARS[cls]) || (cls === 'xout' ? '#4a5df9' : '#25292e'));
   return { overflowY: el.overflowY, backgroundColor: bg };
@@ -193,7 +195,9 @@ function chatPage({ scheme = 'dark' } = {}) {
   const list = new El('div', { h: 600, scroll: 2000, overflowY: 'auto' }); list.append(inc, out);
   const backdrop = new El('div', { h: 600 }); backdrop.append(list);
   const box = new El('div', { h: 40 });
-  const composer = new El('div', { h: 78 }); composer.append(box);
+  // The composer as observed: a page-colored bar around a page-colored rounded input.
+  const pill = new El('div', { h: 44, bg: 'rgb(12, 16, 20)' }); pill.append(new El('div', { h: 44 }).append(box));
+  const composer = new El('div', { h: 78, bg: 'rgb(12, 16, 20)' }); composer.append(new El('div', { h: 78 }).append(pill));
   const pane = new El('div', { h: 784 }); pane.append(backdrop, composer);
   body.append(pane);
   const context = vm.createContext({
@@ -208,15 +212,15 @@ function chatPage({ scheme = 'dark' } = {}) {
     ${between(content, '  // ---------- Chat themes', '  // ---------- "Follows you" label')}
     globalThis.api = { updateChatTheme, bubbleClasses, themeStyle, get themed() { return themed; } };`, context);
   const send = (themes) => listeners.forEach((fn) => fn({ data: { source: 'ighd-themes', themes } }));
-  return { context, api: context.api, send, html, pane, backdrop, list, out, inc, requests };
+  return { context, api: context.api, send, html, pane, backdrop, list, out, inc, requests, composer, pill, box };
 }
 const fracasolab = () => ({ variants: [
   plain({ mode: 'light', gradient_colors: ['FF892320'], incoming_message_bubble_color: 'FFEFEFEF',
     inbound_message_text_color: 'FF000000', outbound_message_text_color: 'FFFFFFFF',
-    thread_background_color: 'FF66849E', background: IMAGE }),
+    thread_background_color: 'FF66849E', composer_input_background_color: 'FF516F8A', background: IMAGE }),
   plain({ mode: 'dark', gradient_colors: ['FFD9D9D9'], incoming_message_bubble_color: 'FF3F536F',
     inbound_message_text_color: 'FFFFFFFF', outbound_message_text_color: 'FF000000',
-    thread_background_color: 'FF000004', background: IMAGE })
+    thread_background_color: 'FF000004', composer_input_background_color: 'FF202029', background: IMAGE })
 ] });
 
 test('the open chat gets its background, bubble colors and readable text', () => {
@@ -226,9 +230,13 @@ test('the open chat gets its background, bubble colors and readable text', () =>
   assert.equal(p.pane.style.vars['--chat-outgoing-message-bubble-background-color'], '#D9D9D9FF');
   assert.equal(p.pane.style.vars['--ig-outgoing-message-bubble'], '217, 217, 217');
   assert.equal(p.pane.style.vars['--chat-incoming-message-bubble-background-color'], '#3F536FFF');
-  assert.equal(p.backdrop.style.backgroundColor, '#000004FF');
-  assert.equal(p.backdrop.style.backgroundImage, `url("${IMAGE}")`);
-  assert.equal(p.backdrop.style.backgroundSize, 'cover');
+  assert.equal(p.pane.style.backgroundColor, '#000004FF');
+  assert.equal(p.pane.style.backgroundImage, `url("${IMAGE}")`);
+  assert.equal(p.pane.style.backgroundSize, 'cover');
+  assert.equal(p.backdrop.style.backgroundImage, undefined, 'one background behind messages and composer');
+  // The composer bar no longer leaves a band of page color; its input takes the theme color.
+  assert.equal(p.composer.style.backgroundColor, 'transparent');
+  assert.equal(p.pill.style.backgroundColor, '#202029FF');
   assert.deepEqual(plain(p.api.bubbleClasses), { out: 'xout', in: 'xin' });
   assert.match(p.api.themeStyle.textContent, /\.xout \* \{ color: #000000FF !important; \}/);
   assert.match(p.api.themeStyle.textContent, /\.xin \* \{ color: #FFFFFFFF !important; \}/);
@@ -242,7 +250,7 @@ test('the open chat gets its background, bubble colors and readable text', () =>
 test('light mode uses the light variant; repeated checks change nothing', () => {
   const p = chatPage({ scheme: 'light' });
   p.send([{ thread: '7880512602025476', theme: fracasolab() }]);
-  assert.equal(p.backdrop.style.backgroundColor, '#66849EFF');
+  assert.equal(p.pane.style.backgroundColor, '#66849EFF');
   const css = p.api.themeStyle.textContent, themed = p.api.themed;
   for (let i = 0; i < 20; i++) p.api.updateChatTheme();
   assert.equal(p.api.themed, themed);
@@ -250,19 +258,21 @@ test('light mode uses the light variant; repeated checks change nothing', () => 
   // Switching the site to dark mode re-applies with the dark variant.
   p.html.scheme = 'dark';
   p.api.updateChatTheme();
-  assert.equal(p.backdrop.style.backgroundColor, '#000004FF');
+  assert.equal(p.pane.style.backgroundColor, '#000004FF');
 });
 
 test('leaving the chat, a chat without theme and malformed data restore the page', () => {
   const p = chatPage();
-  p.backdrop.style.backgroundColor = 'site-value';
+  p.pane.style.backgroundColor = 'site-value';
   p.send([{ thread: '7880512602025476', theme: fracasolab() }]);
   p.context.location.pathname = '/direct/t/105297574204708/';
   p.api.updateChatTheme();
   assert.equal(p.api.themed, null);
   assert.deepEqual(p.pane.style.vars, {});
-  assert.equal(p.backdrop.style.backgroundColor, 'site-value');
-  assert.equal(p.backdrop.style.backgroundImage, undefined);
+  assert.equal(p.pane.style.backgroundColor, 'site-value');
+  assert.equal(p.pane.style.backgroundImage, undefined);
+  assert.equal(p.composer.style.backgroundColor, undefined);
+  assert.equal(p.pill.style.backgroundColor, undefined);
   assert.equal(p.api.themeStyle.parentElement, null);
   // A theme later removed in the app arrives as null.
   p.context.location.pathname = '/direct/t/7880512602025476/';
@@ -279,6 +289,73 @@ test('only Instagram CDN images over HTTPS are used as backgrounds', () => {
   const theme = fracasolab();
   theme.variants[1].background = 'https://evil.example/x.jpg';
   p.send([{ thread: '7880512602025476', theme }]);
-  assert.equal(p.backdrop.style.backgroundImage, undefined);
-  assert.equal(p.backdrop.style.backgroundColor, '#000004FF');
+  assert.equal(p.pane.style.backgroundImage, undefined);
+  assert.equal(p.pane.style.backgroundColor, '#000004FF');
+});
+
+// ---------- Safety pause ----------
+const flagOf = (sent) => JSON.parse(new URLSearchParams(sent).get('variables'))[FLAG];
+const ok = threadResponse('7880512602025476', variant('NORMAL'));
+
+test('successful themed responses keep the flag on', () => {
+  const h = interceptor();
+  for (let i = 0; i < 3; i++) assert.equal(flagOf(h.send(requestBody(false), ok)), true);
+  assert.equal(h.storage.size, 0);
+});
+
+for (const [name, response, status] of [
+  ['an HTTP error', 'Server error', 500],
+  ['GraphQL errors', { errors: [{ message: 'Unknown variable' }], data: null }, 200],
+  ['GraphQL errors in a later NDJSON part', `${JSON.stringify(ok)}
+${JSON.stringify({ errors: [{ message: 'x' }] })}`, 200],
+  ['a response that is not JSON', '<html>login</html>', 200]
+]) {
+  test(`${name} pauses the flag for a day, also after reloading`, () => {
+    const h = interceptor();
+    h.send(requestBody(false), response, status);
+    assert.equal(flagOf(h.send(requestBody(false), ok)), false, 'the next request is sent as the site made it');
+    const until = Number(h.storage.get('igt-chat-theme-paused-until'));
+    assert.ok(Math.abs(until - (Date.now() + 86400000)) < 5000);
+    const reloaded = interceptor({ storage: h.storage });
+    assert.equal(flagOf(reloaded.send(requestBody(false), ok)), false);
+  });
+}
+
+test('errors in requests the extension did not change are ignored', () => {
+  const h = interceptor();
+  h.send(requestBody(true), { errors: [{ message: 'x' }] });
+  h.send('a=1', 'Server error', 500);
+  assert.equal(h.storage.size, 0);
+  assert.equal(flagOf(h.send(requestBody(false), ok)), true);
+});
+
+test('a failed fetch with the flag also pauses it', async () => {
+  const h = interceptor({ fetchStatus: 400 });
+  await h.window.fetch('https://www.instagram.com/api/graphql', { method: 'POST', body: requestBody(false) });
+  for (let i = 0; i < 5 && !h.storage.size; i++) await new Promise(setImmediate);
+  assert.equal(h.storage.size, 1);
+  assert.equal(flagOf(h.send(requestBody(false), ok)), false);
+});
+
+test('an expired pause and unavailable storage leave the flag on', () => {
+  const old = new Map([['igt-chat-theme-paused-until', String(Date.now() - 1000)]]);
+  assert.equal(flagOf(interceptor({ storage: old }).send(requestBody(false), ok)), true);
+  const broken = { get() { throw new Error('denied'); }, set() { throw new Error('denied'); } };
+  const h = interceptor({ storage: broken });
+  assert.equal(flagOf(h.send(requestBody(false), ok)), true);
+  h.send(requestBody(false), 'Server error', 500);
+  assert.equal(flagOf(h.send(requestBody(false), ok)), false, 'still paused for this page');
+});
+
+test('a re-rendered composer is themed again', () => {
+  const p = chatPage();
+  p.send([{ thread: '7880512602025476', theme: fracasolab() }]);
+  const fresh = new El('div', { h: 44, bg: 'rgb(12, 16, 20)' });
+  const holder = p.pill.parentElement;
+  p.pill.remove();
+  fresh.append(p.box);
+  holder.append(fresh);
+  p.api.updateChatTheme();
+  assert.equal(fresh.style.backgroundColor, '#202029FF');
+  assert.equal(p.composer.style.backgroundColor, 'transparent');
 });

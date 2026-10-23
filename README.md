@@ -28,7 +28,9 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
   own profile or when the page has not provided the relationship.
 - **Chat themes** in direct messages: the conversation's theme from the mobile app (background image,
   bubble and text colors, light / dark variant) is shown on the website, which otherwise leaves it out
-  for some accounts. Chats without a theme are unchanged.
+  for some accounts. Chats without a theme are unchanged. If Instagram ever rejects the
+  conversation request with the theme flag, the extension stops setting it for 24 hours so
+  conversations keep loading.
 - **♪ Music** on photo posts that have a song attached (as in the mobile app): like reels, the song of the
   post you are looking at plays (the exact clip the author picked, in a loop). It keeps playing as you
   scroll while its photo remains visible and dominant, then switches when the next post fills about
@@ -102,7 +104,7 @@ larger size.
 
 ## Website and store distribution
 
-Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.5.0.zip` and
+Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.5.1.zip` and
 `dist/site/`. The package contains only extension runtime assets, the license and privacy policy.
 The GitHub Pages workflow builds this same ZIP and deploys the static site on main pushes. The
 website has no analytics, third-party fonts or scripts, and no backend. GitHub serves the public site

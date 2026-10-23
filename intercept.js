@@ -179,6 +179,7 @@
   // only when the flag is present and off, never altering the site's own object.
   function withChatThemes(body) {
     try {
+      if (themeFlagPaused()) return body;
       if (typeof body === 'string' && !body.includes('ChatThemesQE')) return body;
       const form = typeof FormData !== 'undefined' && body instanceof FormData;
       if (typeof body !== 'string' && !form && !(body instanceof URLSearchParams)) return body;
@@ -197,12 +198,32 @@
       return copy;
     } catch (_) { return body; }
   }
+
+  // Safety: if Instagram ever rejects a request with the flag set (HTTP error or GraphQL errors),
+  // stop setting it for a day so conversations always load. The retry time is kept in this site's
+  // local storage, so a rejection is not repeated on every page load.
+  const THEME_PAUSE_KEY = 'igt-chat-theme-paused-until';
+  const THEME_PAUSE_MS = 24 * 60 * 60 * 1000;
+  let themePausedUntil = 0;
+  try { themePausedUntil = Number(window.localStorage?.getItem(THEME_PAUSE_KEY)) || 0; } catch (_) {}
+  const themeFlagPaused = () => Date.now() < themePausedUntil;
+  function checkThemeResponse(status, text) {
+    let failed = !(status >= 200 && status < 300);
+    if (!failed && typeof text === 'string' && text.length <= MAX_RESPONSE_BYTES) {
+      const docs = parseAll(text);
+      failed = !docs.length || docs.some((d) => Array.isArray(d?.errors) && d.errors.length > 0);
+    }
+    if (!failed || themeFlagPaused()) return;
+    themePausedUntil = Date.now() + THEME_PAUSE_MS;
+    try { window.localStorage?.setItem(THEME_PAUSE_KEY, String(themePausedUntil)); } catch (_) {}
+    slog(`chat themes paused for 24 h: conversation request answered ${status}${failed && status < 300 ? ' with errors' : ''}`);
+  }
   // The conversation request often finishes before content.js starts listening; keep recent
   // themes so it can ask for them.
   const recentThemes = new Map();
 
   const THEME_COLORS = ['gradient_colors', 'incoming_message_bubble_color', 'inbound_message_text_color',
-    'outbound_message_text_color', 'thread_background_color'];
+    'outbound_message_text_color', 'thread_background_color', 'composer_input_background_color'];
   // One light / dark variant: ARGB hex colors and an optional background image.
   function themeVariant(t) {
     if (!t || typeof t !== 'object') return null;
@@ -460,12 +481,15 @@
   let passiveReads = 0;
   window.fetch = async function (...args) {
     const a = args[0];
-    if (args[1]?.body != null) {
-      const body = withChatThemes(args[1].body);
-      if (body !== args[1].body) args[1] = { ...args[1], body };
-    }
+    let req = null, themed = false;
+    try {
+      const url = a instanceof Request ? a.url : String(a);
+      if (interesting(url) && args[1]?.body != null) {
+        const body = withChatThemes(args[1].body);
+        if (body !== args[1].body) { args[1] = { ...args[1], body }; themed = true; }
+      }
+    } catch (_) {}
     const init = args[1] || {};
-    let req = null;
     try {
       const url = a instanceof Request ? a.url : String(a);
       if (interesting(url)) {
@@ -479,6 +503,11 @@
       }
     } catch (_) {}
     const res = await origFetch.apply(this, args);
+    if (themed) {
+      try {
+        readResponseText(res.clone()).then((t) => checkThemeResponse(res.status, t)).catch(() => {});
+      } catch (_) {}
+    }
     if (req && passiveReads < 2 && Number(res.headers.get('content-length')) <= MAX_RESPONSE_BYTES) {
       try {
         const copy = res.clone();
@@ -501,6 +530,10 @@
       if (!this.__igtListening) this.addEventListener('load', () => {
         try {
           if (!this.__igt) return;
+          if (this.__igt.themed) {
+            const text = this.responseType === '' || this.responseType === 'text' ? this.responseText : null;
+            checkThemeResponse(this.status, text);
+          }
           if (this.responseType === '' || this.responseType === 'text') handleText(this.responseText, this.__igt);
           else if (this.responseType === 'json') handleObject(this.response, this.__igt);
         } catch (_) {}
@@ -514,8 +547,10 @@
     return origSetHeader.call(this, k, v);
   };
   XMLHttpRequest.prototype.send = function (body) {
-    body = withChatThemes(body);
     if (this.__igt) {
+      const sent = withChatThemes(body);
+      this.__igt.themed = sent !== body;
+      body = sent;
       this.__igt.body = bodyText(body);
       noteApiHeaders(this.__igt.url, this.__igt.headers);
     }

@@ -41,7 +41,7 @@ Messages between worlds are checked with `fromPage(e)` (same window + same origi
 - Logged-out testing is limited (login wall hides carousels, no music fields). Ask the owner for
   console output (`igtSongStatus()`) or to connect a browser tool if you need the logged-in view.
 
-## Chat themes (v2.5.0)
+## Chat themes (v2.5.0, safety pause and composer in v2.5.1)
 
 Owner asked to see chat themes on the web, with nothing to enable besides the extension, and approved
 the non-passive approach after a test. Details and observed fields: CHAT_THEME_FEASIBILITY.md. The web
@@ -58,7 +58,17 @@ on the parent of the message list (tallest scrolling div). Text colors are not v
 class that paints each bubble color is found by giving a matching bubble's classes to a test element,
 then one style rule colors that class. Bubbles also have a 10px outline in the page background color
 (shapes grouped corners); over the theme image it drew a dark box around each message, so the
-rule makes that outline transparent. Leaving the chat restores the saved inline values. During
+rule makes that outline transparent. Leaving the chat restores the saved inline values.
+
+v2.5.1, owner-requested after a risk review: if a request the extension changed answers non-2xx,
+non-JSON, or with GraphQL `errors` (any NDJSON part), `checkThemeResponse` pauses the flag for 24 h
+(`igt-chat-theme-paused-until` in instagram.com localStorage; in-memory if storage fails) so a
+server-side rejection cannot keep breaking conversations. Only changed requests are checked; the log
+line appears in `igtSongStatus()`. The owner reported a black band at the message box in all themed
+chats: the composer bar and its rounded input are painted with the page color. The background now
+goes on the whole pane, the bar's opaque layers become transparent and the innermost one (the input)
+takes `composer_input_background_color`; all are restored on leaving, and a re-rendered composer is
+themed again. After reloading, the owner confirmed the black band is gone ("la barra negra ya no está"). During
 development Claude Code's auto-mode classifier blocked this work as request tampering; the owner
 explicitly authorized it and switched permission mode.
 
