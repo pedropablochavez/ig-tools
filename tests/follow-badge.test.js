@@ -117,7 +117,7 @@ function page(cookie = 'ds_user_id=999; csrftoken=x') {
   vm.runInContext(`${between(content, '  // First URL segments', '  // Messages come from intercept.js')}
     ${between(content, '  function remember(', '  // ---------- Data ----------')}
     ${between(content, '  // Whether each user follows you', '  function interceptDiag(')}
-    ${between(content, '  // ---------- "Follows you" label', '  // The site is a single-page app')}
+    ${between(content, '  // ---------- "Follows you" label', '  // ---------- Non-followers scan')}
     globalThis.api = { updateFollowBadge, followBadge };`, context);
   const send = (friendships) => listeners.forEach((fn) => fn({ data: { source: 'ighd-friendship', friendships } }));
   const show = (username, header) => {

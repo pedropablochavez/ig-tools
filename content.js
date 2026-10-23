@@ -1556,6 +1556,290 @@
     if (anchor.nextSibling !== followBadge) anchor.after(followBadge);
   }
 
+  // ---------- Non-followers scan ----------
+  // Only on your own profile. The panel explains the risk first; only its Start button (a real
+  // click) asks intercept.js to read your lists. Results stay in this tab's memory; only the
+  // whitelist and the verified filter are saved (extension storage).
+
+  let viewer = null;
+  const nf = { id: null, state: 'idle', note: '', progress: null, result: null };
+  const count = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
+  const fmt = (n) => n.toLocaleString('en-US');
+  const NF_PAGE = 12;
+
+  window.addEventListener('message', (e) => {
+    if (!fromPage(e)) return;
+    const d = e.data;
+    if (d?.source === 'ighd-viewer' && typeof d.username === 'string') {
+      viewer = { username: d.username.toLowerCase(), followers: count(d.followers), following: count(d.following) };
+      updateNfButton();
+    } else if (d?.source === 'ighd-nf' && nf.id && d.id === nf.id) {
+      onScanMessage(d);
+    }
+  });
+  window.postMessage({ source: 'ighd-viewer-request' }, location.origin);
+
+  const nfBtn = document.createElement('button');
+  nfBtn.id = 'ighd-nf-btn';
+  nfBtn.type = 'button';
+  nfBtn.textContent = 'Scan non-followers';
+  nfBtn.addEventListener('click', () => { nfPanel.isConnected ? nfPanel.remove() : openNfPanel(); });
+
+  const nfPanel = document.createElement('div');
+  nfPanel.id = 'ighd-nf';
+  nfPanel.setAttribute('role', 'dialog');
+  nfPanel.setAttribute('aria-label', 'Non-followers scan');
+
+  // Whitelist (accounts you follow on purpose even if they don't follow back) and the "show
+  // verified accounts" choice (off by default: verified accounts are left out). Saved in the extension's own storage, which instagram.com cannot
+  // read, and never sent anywhere. Keyed by pk, so a renamed account stays whitelisted.
+  const NF_KEYS = ['nfWhitelist', 'nfShowVerified'];
+  const NF_WHITELIST_MAX = 5000;
+  const whitelist = new Map();
+  let showVerified = false;
+
+  function loadNfPrefs() {
+    try {
+      chrome.storage.local.get(NF_KEYS, (data) => {
+        whitelist.clear();
+        const saved = data?.nfWhitelist;
+        if (saved && typeof saved === 'object') {
+          for (const [pk, name] of Object.entries(saved)) {
+            if (whitelist.size >= NF_WHITELIST_MAX) break;
+            if (/^\d{1,32}$/.test(pk) && typeof name === 'string' && /^[a-z0-9._]{1,30}$/.test(name)) whitelist.set(pk, name);
+          }
+        }
+        showVerified = data?.nfShowVerified === true;
+        renderNf();
+      });
+    } catch (_) {} // The extension was reloaded; this page keeps its last values.
+  }
+  function saveNfPrefs() {
+    try {
+      chrome.storage.local.set({ nfWhitelist: Object.fromEntries(whitelist), nfShowVerified: showVerified });
+    } catch (_) {}
+  }
+  loadNfPrefs();
+  try {
+    // Changes made in another Instagram tab.
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && NF_KEYS.some((k) => k in changes)) loadNfPrefs();
+    });
+  } catch (_) {}
+
+  function toggleWhitelist(u) {
+    if (whitelist.has(u.pk)) whitelist.delete(u.pk);
+    else if (whitelist.size < NF_WHITELIST_MAX) whitelist.set(u.pk, u.username);
+    else toast(`The whitelist holds up to ${fmt(NF_WHITELIST_MAX)} accounts`);
+    saveNfPrefs();
+    renderNf();
+  }
+
+  // The result list without whitelisted accounts and, unless you show them, verified ones.
+  const nfShown = () => (nf.result?.users || []).filter((u) => !whitelist.has(u.pk) && (showVerified || !u.isVerified));
+  const whitelistButton = () => h('button', { type: 'button', text: `Whitelist (${fmt(whitelist.size)})`,
+    on: () => { nf.view = 'whitelist'; renderNf(); } });
+  // A toggle chip; the same choice before a scan (next to Start scan) and on its results.
+  function verifiedToggle() {
+    const box = h('input', { type: 'checkbox' });
+    box.checked = showVerified;
+    box.addEventListener('change', () => { showVerified = box.checked; saveNfPrefs(); renderNf(); });
+    return h('label', { class: 'ighd-nf-chip' }, box, h('span', { text: 'Show verified accounts' }));
+  }
+
+  const onOwnProfile = () => !!viewer && getUsername()?.toLowerCase() === viewer.username;
+  // A started scan keeps running while you browse elsewhere in this tab (a page reload ends it);
+  // the button then stays visible to show progress, and until you open a finished result.
+  const nfVisible = () => onOwnProfile() || nf.state === 'running' || (nf.state === 'done' && !nf.seen)
+    || nfPanel.isConnected;
+
+  function updateNfButton() {
+    if (nfVisible()) {
+      if (!nfBtn.isConnected) document.body.appendChild(nfBtn);
+      return;
+    }
+    nfBtn.remove();
+    nfPanel.remove();
+  }
+
+  function openNfPanel() {
+    if (!nfVisible()) return;
+    document.body.appendChild(nfPanel);
+    renderNf();
+  }
+
+  function startNfScan(e) {
+    if (!e?.isTrusted || nf.state === 'running' || !onOwnProfile()) return;
+    nf.id = crypto.randomUUID();
+    nf.state = 'running';
+    nf.note = '';
+    nf.result = null;
+    nf.seen = false;
+    nf.view = 'results';
+    nf.progress = { list: 'followers', followers: 0, following: 0,
+      totals: { followers: viewer.followers, following: viewer.following } };
+    renderNf();
+    window.postMessage({ source: 'ighd-nf-start', id: nf.id }, location.origin);
+  }
+
+  function cancelNfScan(note = 'Scan cancelled.') {
+    if (nf.id) window.postMessage({ source: 'ighd-nf-cancel', id: nf.id }, location.origin);
+    nf.id = null;
+    nf.state = 'idle';
+    nf.note = note;
+    renderNf();
+  }
+
+  const NF_REASONS = {
+    'rate-limit': 'Instagram answered "too many requests" (HTTP 429).',
+    blocked: 'Instagram reported a block or a verification request. Use Instagram normally and resolve any notice first.',
+    network: 'A request failed or took too long.',
+    error: 'Instagram sent an unexpected answer.',
+    cooldown: 'IG Tools is waiting after an earlier Instagram limit.',
+    limited: 'Instagram limits these lists for your account, so a full comparison is not possible.',
+    limit: 'The scan reached its safety limit of pages.',
+    'too-large': 'Your lists are larger than the safety limit of this scan, so it did not start.',
+    'not-own-profile': 'Open your own profile to scan.',
+    'no-click': 'The scan only starts right after you press Start.'
+  };
+
+  function onScanMessage(d) {
+    if (d.state === 'running') {
+      nf.progress = { list: d.list, followers: count(d.followers) || 0, following: count(d.following) || 0,
+        totals: nf.progress?.totals || {} };
+    } else if (d.state === 'done' && Array.isArray(d.users)) {
+      nf.id = null;
+      nf.state = 'done';
+      nf.result = { users: d.users.filter((u) => typeof u?.username === 'string' && /^[a-z0-9._]{1,30}$/.test(u.username)),
+        followers: count(d.followers) || 0, following: count(d.following) || 0, totals: nf.progress?.totals || {} };
+    } else if (['stopped', 'refused', 'cancelled'].includes(d.state)) {
+      nf.id = null;
+      nf.state = 'idle';
+      const retry = Number.isFinite(d.retryAt) && d.retryAt > Date.now()
+        ? ` Try again after ${new Date(d.retryAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`
+        : d.state === 'cancelled' ? '' : ' There is no automatic retry.';
+      const partial = d.state === 'stopped' && d.pages ? ` Read ${fmt(count(d.followers) || 0)} followers and ${fmt(count(d.following) || 0)} following before stopping.` : '';
+      nf.note = (d.state === 'cancelled' ? 'Scan cancelled.' : `Scan stopped. ${NF_REASONS[d.reason] || 'Unknown error.'}`) + partial + retry;
+      if (!nfPanel.isConnected && d.state === 'stopped') toast(nf.note, 8000);
+    }
+    if (nf.state === 'done' && !nfPanel.isConnected) toast('Non-followers scan finished. Click the button to see the results.', 6000);
+    renderNf();
+    updateNfButton();
+  }
+
+  // Builds an element; text is always set as text, never as HTML.
+  function h(tag, attrs = {}, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'text') el.textContent = v;
+      else if (k === 'on') el.addEventListener('click', v);
+      else el.setAttribute(k, v);
+    }
+    el.append(...kids.filter(Boolean));
+    return el;
+  }
+
+  function renderNf() {
+    if (nf.state === 'done' && nfPanel.isConnected) nf.seen = true;
+    const p = nf.progress, total = (p?.totals.followers ?? NaN) + (p?.totals.following ?? NaN);
+    nfBtn.textContent = nf.state !== 'running' ? (nf.state === 'done' && !nf.seen ? 'Non-followers ready' : 'Scan non-followers')
+      : total > 0 ? `Scanning… ${Math.min(99, Math.floor((p.followers + p.following) / total * 100))}%` : 'Scanning…';
+    if (!nfPanel.isConnected) return;
+    const close = h('button', { type: 'button', class: 'ighd-nf-close', 'aria-label': 'Close', text: '✕', on: () => nfPanel.remove() });
+    const body = [];
+    const actions = [];
+    if (nf.state === 'running') {
+      const p = nf.progress;
+      const line = (label, n, total) => h('div', { class: 'ighd-nf-progress',
+        text: `${label} ${fmt(n)}${total != null ? ` / ${fmt(total)}` : ''}` });
+      body.push(h('p', { text: 'Reading your lists, one page every 2–4 seconds. You can keep using Instagram in this '
+          + 'tab; reloading or closing it stops the scan.' }),
+        line('Followers', p.followers, p.totals.followers), line('Following', p.following, p.totals.following));
+      actions.push(h('button', { type: 'button', text: 'Cancel', on: () => cancelNfScan() }));
+    } else if (nf.view === 'whitelist') {
+      body.push(h('p', { class: 'ighd-nf-meta', text: 'Whitelisted accounts are never listed as non-followers. '
+        + 'The whitelist is saved in the extension on this computer.' }));
+      const list = h('ul', { class: 'ighd-nf-list' });
+      for (const [pk, username] of whitelist) {
+        list.append(h('li', {}, h('a', { href: `/${username}/`, target: '_blank', rel: 'noopener' }, h('strong', { text: `@${username}` })),
+          h('button', { type: 'button', class: 'ighd-nf-row-btn', text: 'Remove', 'aria-label': `Remove @${username} from the whitelist`,
+            on: () => toggleWhitelist({ pk, username }) })));
+      }
+      body.push(whitelist.size ? list : h('p', { text: 'No accounts yet. After a scan, press Keep next to an account '
+        + 'you follow on purpose; it will not be listed again.' }));
+      actions.push(h('button', { type: 'button', text: 'Back', on: () => { nf.view = 'results'; renderNf(); } }));
+    } else if (nf.state === 'done') {
+      const r = nf.result, shown = nfShown();
+      const kept = r.users.filter((u) => whitelist.has(u.pk)).length;
+      const verified = showVerified ? 0 : r.users.filter((u) => u.isVerified && !whitelist.has(u.pk)).length;
+      body.push(h('p', { class: 'ighd-nf-summary', text: shown.length === 1
+        ? "1 account you follow doesn't follow you back."
+        : `${fmt(shown.length)} accounts you follow don't follow you back.` }));
+      if (kept || verified) {
+        body.push(h('p', { class: 'ighd-nf-meta', text: `Not shown: ${[kept && `${fmt(kept)} whitelisted`,
+          verified && `${fmt(verified)} verified`].filter(Boolean).join(', ')}.` }));
+      }
+      if ((r.totals.followers != null && r.followers < r.totals.followers) || (r.totals.following != null && r.following < r.totals.following)) {
+        body.push(h('p', { class: 'ighd-nf-note', text: `Instagram returned ${fmt(r.followers)} followers and ${fmt(r.following)} following `
+          + 'out of the totals on your profile (hidden or deactivated accounts), so a few results may be wrong.' }));
+      }
+      body.push(verifiedToggle());
+      const list = h('ul', { class: 'ighd-nf-list' });
+      for (const u of shown) {
+        const pic = typeof u.pic === 'string' && /^https:\/\/[^/]*(cdninstagram\.com|fbcdn\.net)\//.test(u.pic)
+          ? h('img', { src: u.pic, alt: '', loading: 'lazy' }) : h('span', { class: 'ighd-nf-nopic' });
+        list.append(h('li', {}, pic, h('a', { href: `/${u.username}/`, target: '_blank', rel: 'noopener' },
+          h('strong', { text: `@${u.username}` }, u.isVerified ? h('span', { class: 'ighd-nf-badge', text: 'Verified' }) : null),
+          u.fullName ? h('span', { text: String(u.fullName).slice(0, 100) }) : null),
+        h('button', { type: 'button', class: 'ighd-nf-row-btn', text: 'Keep', title: 'Add to the whitelist: never list this account again',
+          'aria-label': `Keep @${u.username}: add to the whitelist`, on: () => toggleWhitelist(u) })));
+      }
+      body.push(list);
+      actions.push(h('button', { type: 'button', class: 'ighd-nf-primary', text: 'Export CSV', on: exportNfCsv }), whitelistButton(),
+        onOwnProfile() && h('button', { type: 'button', text: 'New scan', on: () => { nf.state = 'idle'; nf.note = ''; renderNf(); } }));
+    } else {
+      const pages = Math.ceil((viewer?.followers || 0) / NF_PAGE) + Math.ceil((viewer?.following || 0) / NF_PAGE);
+      const time = viewer?.followers != null && viewer?.following != null
+        ? ` For your ${fmt(viewer.followers)} followers and ${fmt(viewer.following)} following that is about ${fmt(pages)} requests and ${Math.max(1, Math.round(pages * 3.3 / 60))} min.`
+        : '';
+      if (nf.note) body.push(h('p', { class: 'ighd-nf-note', role: 'status', text: nf.note }));
+      body.push(h('p', { text: 'Lists the accounts you follow that do not follow you back. IG Tools reads your Followers and '
+          + 'Following lists with the same requests Instagram’s website makes when you scroll them: 12 accounts per request, '
+          + `one request every 2–4 seconds.${time}` }),
+        h('p', { class: 'ighd-nf-warn', text: 'Instagram may limit or block accounts for automated activity. Use this rarely. '
+          + 'The scan stops at the first limit or error and never retries by itself.' }),
+        h('p', { class: 'ighd-nf-meta', text: 'Results stay in this tab only. Your whitelist and filter are saved in the '
+          + 'extension on this computer. Nothing is sent anywhere.' }));
+      actions.push(whitelistButton(), verifiedToggle(),
+        onOwnProfile() ? h('button', { type: 'button', class: 'ighd-nf-primary', text: 'Start scan', on: startNfScan })
+          : h('span', { class: 'ighd-nf-meta', text: 'Open your profile to start a scan.' }));
+    }
+    nfPanel.replaceChildren(
+      h('div', { class: 'ighd-nf-head' }, h('strong', { text: 'Non-followers' }), close),
+      h('div', { class: 'ighd-nf-body' }, ...body),
+      h('div', { class: 'ighd-nf-actions' }, ...actions.filter(Boolean)));
+  }
+
+  // CSV cells are quoted; a leading = + - @ is neutralized so spreadsheets do not run formulas.
+  function nfCsv(users) {
+    const cell = (v) => {
+      let t = String(v ?? '');
+      if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`;
+      return `"${t.replace(/"/g, '""')}"`;
+    };
+    const rows = [['pk', 'username', 'full_name', 'profile_url', 'is_private', 'is_verified'],
+      ...users.map((u) => [u.pk, u.username, u.fullName, `https://www.instagram.com/${u.username}/`, !!u.isPrivate, !!u.isVerified])];
+    return '﻿' + rows.map((r) => r.map(cell).join(',')).join('\r\n');
+  }
+
+  async function exportNfCsv() {
+    if (!nf.result) return;
+    const date = new Date().toISOString().slice(0, 10);
+    const ok = await download(`data:text/csv;charset=utf-8,${encodeURIComponent(nfCsv(nfShown()))}`,
+      `${viewer?.username || 'instagram'}_non-followers_${date}.csv`);
+    toast(ok ? 'CSV saved to your downloads' : 'Could not save the CSV');
+  }
+
   // The site is a single-page app: watch URL changes to show/hide the buttons.
   let lastPath = null;
   function sync() {
@@ -1569,6 +1853,7 @@
     }
     updateFollowBadge();
     updateChatTheme();
+    updateNfButton();
     if (location.pathname === lastPath && (btn.isConnected || !getUsername())) return;
     lastPath = location.pathname;
     if (getUsername()) {

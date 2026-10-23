@@ -22,6 +22,8 @@
 #ighd-btn:active,
 #ighd-story-btn:active { transform: translateY(0); }
 #ighd-story-btn { z-index: 2147483003; }
+/* Above the site's floating Messages button (bottom 32–88 px, observed 2026-10-22). */
+#ighd-btn { bottom: 100px; }
 #ighd-story-btn svg { width: 18px; height: 18px; }
 
 #ighd-overlay {
@@ -205,3 +207,95 @@
 }
 .ighd-music-wrap:hover .ighd-vol,
 .ighd-vol:focus { width: 90px; opacity: 1; margin-left: 8px; }
+
+/* Non-followers scan: button above the HD photo button, panel above both. */
+#ighd-nf-btn {
+  position: fixed;
+  right: 24px;
+  bottom: 150px;
+  z-index: 2147483000;
+  padding: 10px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: #262626;
+  color: #fff;
+  font: 600 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+#ighd-nf-btn:hover { filter: brightness(1.2); }
+#ighd-nf {
+  position: fixed;
+  right: 24px;
+  bottom: 198px;
+  z-index: 2147483001;
+  display: flex;
+  flex-direction: column;
+  width: min(380px, calc(100vw - 32px));
+  max-height: min(620px, calc(100vh - 214px));
+  border-radius: 14px;
+  background: #121212;
+  color: #f5f5f5;
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+#ighd-nf .ighd-nf-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #262626; }
+#ighd-nf .ighd-nf-close { border: 0; background: none; color: inherit; font-size: 16px; cursor: pointer; }
+#ighd-nf .ighd-nf-body { padding: 4px 16px; overflow-y: auto; }
+#ighd-nf p { margin: 10px 0; }
+#ighd-nf .ighd-nf-warn { color: #f5c26b; }
+#ighd-nf .ighd-nf-meta,
+#ighd-nf .ighd-nf-note { color: #a8a8a8; font-size: 13px; }
+#ighd-nf .ighd-nf-summary { font-weight: 600; }
+#ighd-nf .ighd-nf-progress { margin: 6px 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+#ighd-nf .ighd-nf-list { margin: 0 0 8px; padding: 0; list-style: none; }
+#ighd-nf .ighd-nf-list li { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+#ighd-nf .ighd-nf-list img,
+#ighd-nf .ighd-nf-nopic { flex: none; width: 36px; height: 36px; border-radius: 50%; background: #363636; object-fit: cover; }
+#ighd-nf .ighd-nf-list a { display: flex; flex: 1; flex-direction: column; min-width: 0; color: inherit; text-decoration: none; }
+#ighd-nf .ighd-nf-list a:hover strong { text-decoration: underline; }
+#ighd-nf .ighd-nf-list a span { overflow: hidden; color: #a8a8a8; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+#ighd-nf .ighd-nf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  padding: 7px 10px;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  color: #f5f5f5;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+#ighd-nf .ighd-nf-chip:hover { background: #262626; }
+#ighd-nf .ighd-nf-chip input { margin: 0; accent-color: #0095f6; }
+#ighd-nf .ighd-nf-badge { margin-left: 6px; padding: 1px 6px; border: 1px solid #555; border-radius: 999px; color: #a8a8a8; font-size: 11px; font-weight: 600; }
+#ighd-nf .ighd-nf-row-btn {
+  flex: none;
+  padding: 6px 10px;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  background: none;
+  color: #f5f5f5;
+  font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  cursor: pointer;
+}
+#ighd-nf .ighd-nf-row-btn:hover { background: #262626; }
+#ighd-nf .ighd-nf-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid #262626; }
+#ighd-nf .ighd-nf-actions button {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: #363636;
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+#ighd-nf .ighd-nf-actions .ighd-nf-primary { background: #0095f6; }
+#ighd-nf .ighd-nf-actions button:hover { filter: brightness(1.15); }

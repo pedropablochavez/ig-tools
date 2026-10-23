@@ -10,7 +10,7 @@ Status: prepared for the owner's first submission; **not published or approved**
 - Homepage: https://pedropablochavez.github.io/ig-tools/
 - Privacy policy: https://pedropablochavez.github.io/ig-tools/privacy.html
 - Support: https://github.com/pedropablochavez/ig-tools/issues
-- Package: build with `python scripts/build_distribution.py`; upload `dist/ig-tools-v2.5.1.zip`
+- Package: build with `python scripts/build_distribution.py`; upload `dist/ig-tools-v2.6.0.zip`
 - Short description: use the current manifest description (119 characters, within the 132 limit).
 
 ## Detailed description
@@ -25,6 +25,9 @@ IG Tools (Unofficial) adds practical media controls to the desktop website:
 • Hear music attached to photo posts automatically, using the clip selected by the author.
 • See song titles, artists and original audio credits when the page provides them.
 • See whether a profile you visit follows you, from the profile data the page already loaded.
+• On your own profile, scan which accounts you follow don't follow you back (on request, with a
+  progress indicator and Cancel), and export that list as a CSV file. Report only: no unfollowing.
+  Keep a whitelist of accounts you follow on purpose; verified accounts are left out unless shown.
 • See a direct-message conversation's theme (background and bubble colors) set in the mobile app.
 • Pause or resume music, adjust volume and let playback follow the visible post.
 
@@ -32,7 +35,10 @@ Playback stops when the post leaves view, another post takes over or the tab is 
 extension audio player handles browsers that require a first click for webpage audio.
 
 The extension reads media data the website supplies to your session. For missing song or full-video
-details, it can request the same individual post information the website uses. It does not unlock
+details, it can request the same individual post information the website uses. When you start a
+non-followers scan on your own profile, it reads your own Followers and Following lists with the
+website's list request, one page at a time with 2–4 second pauses, and stops at the first rate limit,
+block or error without retrying. Instagram may limit accounts for automated activity; use it rarely. It does not unlock
 private accounts, bypass access restrictions, or make unavailable media downloadable.
 
 No analytics, advertising, telemetry or developer servers. Temporary media caches are bounded.
@@ -48,8 +54,9 @@ personal, lawful purposes, respect copyright and privacy, and follow the site's 
 
 ## Single purpose
 
-Provide media viewing, saving and playback controls for the Instagram content the user can already
-access in their own desktop browser session.
+Provide media viewing, saving and playback controls, and information about the user's own follower
+relationships, for the Instagram content the user can already access in their own desktop browser
+session.
 
 ## Permission justifications
 
@@ -59,12 +66,21 @@ Run bundled content scripts on the supported website to read already-loaded medi
 full-size profile pictures, audio credits, whether a visited profile follows the user and chat themes,
 attach user-initiated download controls and select the visible post for playback. Missing media details
 are requested from the site's same-origin single-post endpoint. The site's own conversation request is
-sent with its chat theme flag enabled so the theme is included. No other website access is requested.
+sent with its chat theme flag enabled so the theme is included. Only when the user presses Start scan on
+their own profile, the pages of the user's own Followers / Following lists are requested from the site's
+same-origin list endpoint (the request the website uses for those dialogs), one at a time, to show which
+followed accounts do not follow back; results stay in tab memory. No other website access is requested.
 
 ### downloads
 
-Save a media file only when the user clicks a download control. Downloads go to the browser's normal
-download system. For small story videos, the extension may pass a locally repaired video as a data URL.
+Save a media file, or the non-followers list as CSV, only when the user clicks a download / export
+control. Downloads go to the browser's normal download system. For small story videos, the extension may pass a locally repaired video as a data URL.
+
+### storage
+
+Remember, on the user's computer, the non-followers whitelist (account ids and usernames the user
+chose to keep) and the "Show verified accounts" choice, so later scans do not list them again. Stored
+in chrome.storage.local only; never sent to the developer or any server, and removed on uninstall.
 
 ### offscreen
 
@@ -78,7 +94,10 @@ stops when the tab leaves the post, hides, disconnects or loses its heartbeat.
 - Remote code: **No**. All executed JavaScript is bundled. Fetched JSON and media are data, not code.
 - Developer collection / transfer: **None**. No analytics, accounts, tracking or external backend.
 - Local processing: website media / credits and diagnostic data in temporary memory; volume in local
-  storage on instagram.com. Files are saved at the user's request.
+  storage on instagram.com. Files are saved at the user's request. Non-followers scan results (the
+  user's own follower relationships) stay in tab memory and leave the browser only as a CSV the user
+  chooses to save. The whitelist the user builds (ids / usernames) and one filter choice are kept in
+  chrome.storage.local on the device.
 - The owner must read and certify the dashboard's current privacy disclosures personally, keeping
   answers consistent with PRIVACY.md. No certification or developer agreement has been accepted here.
 
@@ -92,7 +111,11 @@ stops when the tab leaves the post, hides, disconnects or loses its heartbeat.
    viewport, its clip plays without clicking the page; the ♪ control pauses / resumes it. Scroll to
    the next post and hide the tab to check playback stops or changes. Data availability depends on
    the content the site sends to that account.
-5. Confirm the extension shows song / original audio credits when available and does not request
+5. On the test account's own profile, click Scan non-followers, read the notice and press Start scan.
+   Progress shows "Followers n / total" and "Following n / total"; Cancel stops it. The result lists
+   followed accounts that do not follow back, and Export CSV saves them. It does not appear on other
+   profiles and never starts without Start scan.
+6. Confirm the extension shows song / original audio credits when available and does not request
    access to unrelated domains. No remote executable code, browsing-history permission or analytics.
 
 Store images use sample artwork and clearly label illustrative demos. Extension controls in the demo

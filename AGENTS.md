@@ -11,8 +11,9 @@ docs are in English. Load it via `brave://extensions` → Developer mode → Loa
   branding (colors/logo); name is "IG Tools (Unofficial)".
 - **Passive first:** prefer reading data the page already loaded (`intercept.js`). The only requests
   the extension makes itself: the file the user downloads, and `/api/v1/media/<id>/info/` (the same
-  request the site makes when a post is opened) for one post at a time. The one modified site request:
-  the conversation query's chat theme flag (owner-approved exception, v2.5.0; see below).
+  request the site makes when a post is opened) for one post at a time, plus the owner-approved
+  non-followers scan of the viewer's own lists (v2.6.0, button-started only; see below). The one
+  modified site request: the conversation query's chat theme flag (owner-approved exception, v2.5.0).
 - Commits end with the `Co-Authored-By` trailer used in history. Commit email is the GitHub noreply
   address already set in this repo's git config (do not expose the owner's personal email).
 
@@ -20,8 +21,8 @@ docs are in English. Load it via `brave://extensions` → Developer mode → Loa
 
 | File | World | Role |
 | --- | --- | --- |
-| `intercept.js` | MAIN, `document_start` | Hooks `fetch` / `XMLHttpRequest`, parses JSON responses and embedded `<script type="application/json">`, extracts profile pics, post media (`code` → items), story items (`pk`), and post music. Sends them with `window.postMessage` (`ighd-pics`, `ighd-media`, `ighd-items`, `ighd-friendship`, `ighd-themes`). Sets the chat theme flag in the site's conversation request (`withChatThemes`). Handles `ighd-load-post` → fetches `/api/v1/media/<id>/info/` (id = post code decoded as base64 digits, `codeToId`). Console helpers: `igtSongStatus()`, `igtMusicFields()`. |
-| `content.js` | isolated | UI: profile HD viewer, download button in each post's like/comment/share bar (`postBars()`), story download button, ♪ music overlay + volume slider, reels-like autoplay (`updateFocusPlay`). Carousel slide detection via real visibility (`visibleArea`, `selection`). |
+| `intercept.js` | MAIN, `document_start` | Hooks `fetch` / `XMLHttpRequest`, parses JSON responses and embedded `<script type="application/json">`, extracts profile pics, post media (`code` → items), story items (`pk`), and post music. Sends them with `window.postMessage` (`ighd-pics`, `ighd-media`, `ighd-items`, `ighd-friendship`, `ighd-themes`). Sets the chat theme flag in the site's conversation request (`withChatThemes`). Publishes the viewer's own profile (`ighd-viewer`) and runs the non-followers scan (`ighd-nf-start` / `ighd-nf-cancel` → `ighd-nf`). Handles `ighd-load-post` → fetches `/api/v1/media/<id>/info/` (id = post code decoded as base64 digits, `codeToId`). Console helpers: `igtSongStatus()`, `igtMusicFields()`. |
+| `content.js` | isolated | UI: profile HD viewer, download button in each post's like/comment/share bar (`postBars()`), story download button, ♪ music overlay + volume slider, reels-like autoplay (`updateFocusPlay`), non-followers button / panel / CSV (`updateNfButton`, `renderNf`). Carousel slide detection via real visibility (`visibleArea`, `selection`). |
 | `mp4fix.js` | isolated | Rewrites `stts` of ~1 fps "photo + music" story videos so Windows decoders show the picture immediately (no re-encode). |
 | `background.js` | SW | `chrome.downloads.download` (accepts data: URLs from `downloadMedia`). |
 | `music-player.js` | isolated | Audio adapter: page Audio first; falls back on NotAllowedError to an internal extension player over a runtime port. Mirrors state, clip, volume and pause; pagehide disconnects. |
@@ -40,6 +41,65 @@ Messages between worlds are checked with `fromPage(e)` (same window + same origi
 - Post bar detection must require the big (24px) like icon + comment icon; comments have 12px hearts.
 - Logged-out testing is limited (login wall hides carousels, no music fields). Ask the owner for
   console output (`igtSongStatus()`) or to connect a browser tool if you need the logged-in view.
+
+## Non-followers scan (v2.6.0)
+
+Owner asked for a "Scan non-followers" button on their own profile, approved after a written risk
+review (NON_FOLLOWERS_FEASIBILITY.md) the active approach "b1": exactly the website's own list request,
+page size 12, 2–4 s random pauses, page cap, Cancel, full stop on 429 / block / error. They pointed at
+davidarroyo1234/InstagramUnfollowers as a reference: same endpoints, but do NOT copy its `count=50`,
+automatic retries after 429, unfollow feature, localStorage results or scanning other accounts.
+
+Observed in the owner's Brave on 2026-10-22 (read-only probe, no own requests): the dialogs call
+`GET /api/v1/friendships/<pk>/followers/?count=12[&max_id=…]&search_surface=follow_list_page` and
+`/following/?count=12[&max_id=…]`, `page_size: 12`, `has_more`, `next_max_id` (opaque for followers,
+numeric offset for following). Each page is followed by `POST /friendships/show_many/`, which has NO
+`followed_by`: reading both lists is the only way. The scan skips `show_many`. Owner: 879 followers,
+1,074 following → 164 pages, ~9 min.
+
+`intercept.js`: `collect` records the viewer (node pk = `ds_user_id`) with `follower_count` /
+`following_count` (or `edge_followed_by` / `edge_follow`), published as `ighd-viewer` and resent on
+`ighd-viewer-request`. `startScan` refuses unless the route's first segment is the viewer's username,
+`navigator.userActivation.isActive` (the Start click), no scan / cooldown is running, and the estimated
+pages fit `SCAN_PAGE_LIMIT` (300). It always reads `ds_user_id`'s lists, never another account's. All
+own requests (post details and scan pages) share one queue (`serial`), so they never overlap. Headers
+come from `apiRequestHeaders()` (the site's own `x-` headers). Stops: 429 → `noteRateLimit` /
+Retry-After (60 s–15 min); `checkpoint` / `feedback_required` / `spam` / "try again later" → 15 min;
+other HTTP errors, non-JSON, timeouts (8 s) → 60 s. The cooldown (`retryAfterUntil`) also pauses post
+lookups. No automatic retry. `should_limit_list_of_*` stops as `limited`. Comparison by `pk`.
+
+`content.js`: floating "Scan non-followers" button (above HD photo) when the route is the viewer's
+username. Owner request after the first real run: a started scan keeps running while they browse
+elsewhere in the tab (SPA navigation; a reload ends it), so the button also stays visible while running
+("Scanning… n%") and until a finished result is opened ("Non-followers ready"); a toast reports the end
+or a stop. Start / New scan appear only on the own profile. The owner also reported the buttons covering
+Instagram's floating Messages pill (measured: fixed, bottom 32–88 px, right 47 px, 251 px wide), so
+`#ighd-btn` sits at bottom 100 px, `#ighd-nf-btn` at 150 px and the panel at 198 px (story button unchanged). It opens a panel with the risk notice and request / time estimate; only the panel's
+Start scan button (trusted click) posts `ighd-nf-start` with a random id. Progress "Followers n /
+total", Cancel, result list (avatar, @username link, name) with all text set as text, CSV export via
+`download()` (data URL, formula-neutralized cells, BOM). Results stay in tab memory only.
+
+Whitelist and verified filter (owner request after confirming the scan works): each result row has
+**Keep**, which adds `{pk: username}` to a whitelist; a Whitelist view lists entries with **Remove**;
+verified accounts (`is_verified` from the scan) are left out by default; a "Show verified accounts"
+chip sits next to Start scan (owner: it must be settable before scanning) and on the results, and the
+Whitelist (n) button is always in the idle panel. Both are saved in
+`chrome.storage.local` (`nfWhitelist`, `nfShowVerified`; new `storage` permission, no install warning),
+not instagram.com localStorage, so the site cannot see the extension's data. Matching is by pk (a
+renamed account stays whitelisted); invalid entries are dropped on load; 5,000-entry cap; other tabs
+follow `storage.onChanged`. The summary counts only shown accounts plus "Not shown: n whitelisted,
+m verified"; Export CSV exports the shown list. Scan results themselves are still memory-only.
+
+Validation: 12 tests in `tests/non-followers.test.js` (fixture pagination with the observed URLs and
+cursors, one request in flight, 2–4 s pauses, pk comparison incl. renamed / reused usernames, Cancel,
+429 with shared cooldown and no retry, blocks / 500 / HTML / network errors, other profile / no viewer /
+no click / too large refused with zero requests, 300-page limit, panel button and trusted click, scan
+continuing off-profile with progress / ready label, CSV, whitelist add / remove / persistence by pk,
+show-verified filter before / after a scan and CSV) plus the 97 existing pass (the follow-badge slice
+now ends at the new section). In the owner's Brave: loading the profile and opening the panel / whitelist
+made zero list requests; the owner ran a real scan and reported it works ("Funciona bien"), then checked
+the off-profile behaviour, button placement and the panel with Whitelist / Show verified ("Todo bien").
+Keep on real results was not observed in the browser (covered by tests only).
 
 ## Chat themes (v2.5.0, safety pause and composer in v2.5.1)
 
@@ -315,4 +375,4 @@ and the audio engine / error. The owner requires playback without changing site 
 - `node --test tests/music-autoplay.test.js` runs the shipped music controller in a `vm` with stubbed
   media and DOM events, covering blocked playback, gesture recovery, focus changes and cancellation.
 - Real UI checks need the owner's logged-in browser.
-- Full suite: `node --test tests/music-autoplay.test.js tests/extension-audio.test.js tests/resource-usage.test.js tests/follow-badge.test.js tests/chat-theme.test.js`.
+- Full suite: `node --test tests/music-autoplay.test.js tests/extension-audio.test.js tests/resource-usage.test.js tests/follow-badge.test.js tests/chat-theme.test.js tests/non-followers.test.js`.

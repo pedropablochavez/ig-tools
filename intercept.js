@@ -1,8 +1,9 @@
 // Runs inside the page itself (world: MAIN) from the very start.
 // It passively reads the responses the site already downloads on its own while you browse
-// and picks out media / audio data, whether each user follows you, and chat themes. Its only own
-// request is a queued post-detail lookup. It also asks the site's own conversation request to
-// include the chat's theme, which the website leaves out for some accounts.
+// and picks out media / audio data, whether each user follows you, and chat themes. Its own
+// requests are a queued post-detail lookup and, only when you start it on your own profile, the
+// pages of your own Followers / Following lists (non-followers scan). It also asks the site's own
+// conversation request to include the chat's theme, which the website leaves out for some accounts.
 // Temporary data goes only to content.js, in the same tab.
 (() => {
   'use strict';
@@ -267,6 +268,15 @@
           followedBy
         });
       }
+      // The logged-in account's own profile (pk = ds_user_id cookie) and its list sizes.
+      if (out.viewerPk && String(node.pk ?? node.id ?? '') === out.viewerPk) {
+        const count = (...vs) => vs.find((v) => Number.isSafeInteger(v) && v >= 0) ?? null;
+        out.viewer = {
+          username: node.username.toLowerCase(),
+          followers: count(node.follower_count, node.edge_followed_by?.count, out.viewer?.followers),
+          following: count(node.following_count, node.edge_follow?.count, out.viewer?.following)
+        };
+      }
     }
     // A conversation: thread_key is the id in /direct/t/<id>/. A null theme means "no theme".
     if ('theme_data' in node && typeof node.thread_key === 'string' && /^\d{5,32}$/.test(node.thread_key)) {
@@ -319,7 +329,7 @@
     stats.responses++;
     if (!/profile_pic_url|image_versions2|video_versions|display_url|music|audio|followed_by|theme_data/.test(text)) return;
     stats.withPics++;
-    const out = { pics: [], media: [], items: [], friendships: [], themes: [] };
+    const out = { pics: [], media: [], items: [], friendships: [], themes: [], viewerPk: cookie('ds_user_id') };
     const budget = { left: 20000 };
     for (const obj of parseAll(text)) { if (budget.left <= 0) break; collect(obj, out, 0, budget); }
     publish(out);
@@ -336,7 +346,7 @@
 
   function handleObject(obj, req) {
     stats.responses++;
-    const out = { pics: [], media: [], items: [], friendships: [], themes: [] };
+    const out = { pics: [], media: [], items: [], friendships: [], themes: [], viewerPk: cookie('ds_user_id') };
     collect(obj, out, 0);
     publish(out);
     logSongs(out.media, req);
@@ -346,7 +356,18 @@
     window.postMessage(msg, location.origin);
   }
 
-  function publish({ pics, media, items, friendships, themes }) {
+  // Your own profile as last seen (username, list sizes); content.js may start listening late.
+  let viewer = null;
+  function publish({ pics, media, items, friendships, themes, viewer: me }) {
+    if (me) {
+      const same = viewer?.username === me.username;
+      const next = { username: me.username, followers: me.followers ?? (same ? viewer.followers : null),
+        following: me.following ?? (same ? viewer.following : null) };
+      if (JSON.stringify(next) !== JSON.stringify(viewer)) {
+        viewer = next;
+        send({ source: 'ighd-viewer', ...viewer });
+      }
+    }
     for (const p of pics) remember(stats.users, p.username, null, 1000);
     if (pics.length) send({ source: 'ighd-pics', pics });
     if (media.length) send({ source: 'ighd-media', media });
@@ -406,15 +427,43 @@
     return m ? decodeURIComponent(m[1]) : '';
   }
 
-  const detailJobs = new Map();
-  let detailChain = Promise.resolve();
+  // All of the extension's own requests go through one queue: never two at the same time.
+  let requestChain = Promise.resolve();
+  function serial(task) {
+    const job = requestChain.then(task);
+    requestChain = job.catch(() => {});
+    return job;
+  }
+
+  // After a 429 (or a block / error during a list scan) no own request is made until this time.
   let retryAfterUntil = 0;
+  function coolDown(ms) {
+    retryAfterUntil = Math.max(retryAfterUntil, Date.now() + Math.min(900000, Math.max(60000, ms || 0)));
+  }
+  function noteRateLimit(res) {
+    if (res.status !== 429) return;
+    const retry = res.headers.get('retry-after');
+    coolDown(/^\d+$/.test(retry || '') ? Number(retry) * 1000 : Date.parse(retry) - Date.now());
+  }
+
+  function apiRequestHeaders() {
+    let claim = '0';
+    try { claim = sessionStorage.getItem('www-claim-v2') || '0'; } catch (_) {}
+    return {
+      'x-ig-app-id': '936619743392459',
+      'x-requested-with': 'XMLHttpRequest',
+      'x-ig-www-claim': claim,
+      ...(apiHeaders || {}),
+      'x-csrftoken': cookie('csrftoken')
+    };
+  }
+
+  const detailJobs = new Map();
   function loadPostDetails(code) {
     if (!/^[A-Za-z0-9_-]{5,32}$/.test(code)) return Promise.resolve({ ok: false, reason: 'bad code' });
     if (detailJobs.has(code)) return detailJobs.get(code);
     if (detailJobs.size >= 6) return Promise.resolve({ ok: false, reason: 'queue full' });
-    const job = detailChain.then(() => fetchPostDetails(code));
-    detailChain = job.catch(() => {});
+    const job = serial(() => fetchPostDetails(code));
     detailJobs.set(code, job);
     job.finally(() => detailJobs.delete(code)).catch(() => {});
     return job;
@@ -425,24 +474,12 @@
     const id = codeToId(code);
     if (!id) return { ok: false, reason: 'bad code' };
     const url = `${location.origin}/api/v1/media/${id}/info/`;
-    let claim = '0';
-    try { claim = sessionStorage.getItem('www-claim-v2') || '0'; } catch (_) {}
-    const headers = {
-      'x-ig-app-id': '936619743392459',
-      'x-requested-with': 'XMLHttpRequest',
-      'x-ig-www-claim': claim,
-      ...(apiHeaders || {}),
-      'x-csrftoken': cookie('csrftoken')
-    };
+    const headers = apiRequestHeaders();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
       const res = await origFetch(url, { headers, credentials: 'include', signal: controller.signal });
-      if (res.status === 429) {
-        const retry = res.headers.get('retry-after');
-        const ms = /^\d+$/.test(retry || '') ? Number(retry) * 1000 : Date.parse(retry) - Date.now();
-        retryAfterUntil = Date.now() + Math.min(900000, Math.max(60000, ms || 0));
-      }
+      noteRateLimit(res);
       const text = await readResponseText(res);
       if (text == null) return { ok: false, status: res.status, reason: 'response limit' };
       const found = handleText(text, { method: 'GET', url, body: null, headers });
@@ -453,6 +490,135 @@
       slog(`post ${code}: failed (${e.message})`);
       return { ok: false, reason: e.message };
     } finally { clearTimeout(timer); }
+  }
+
+  // ---------- Non-followers scan ----------
+  // Reads your own Followers and Following lists with the requests the website makes when you
+  // scroll those dialogs (12 accounts per page), one page at a time with 2–4 s between pages, and
+  // reports the accounts you follow that are not in your followers. Only on your own profile, only
+  // after you press Start; any 429, block or error ends the scan, with no automatic retry.
+  const SCAN_PAGE_SIZE = 12;
+  const SCAN_PAGE_LIMIT = 300;
+  const BLOCKED = /checkpoint|feedback_required|challenge|login_required|spam|rate limit|try again later|please wait/i;
+  let scan = null;
+
+  const routeUser = () => (location.pathname.split('/').filter(Boolean)[0] || '').toLowerCase();
+  const scanSend = (s, msg) => send({ source: 'ighd-nf', id: s.id, ...msg });
+
+  function scanPageUrl(kind, viewerPk, maxId) {
+    const cursor = maxId == null ? '' : `&max_id=${encodeURIComponent(maxId)}`;
+    const tail = kind === 'followers' ? '&search_surface=follow_list_page' : '';
+    return `${location.origin}/api/v1/friendships/${viewerPk}/${kind}/?count=${SCAN_PAGE_SIZE}${cursor}${tail}`;
+  }
+
+  function scanUser(u) {
+    if (!u || typeof u !== 'object') return null;
+    const pk = String(u.pk ?? u.pk_id ?? u.id ?? '');
+    if (!/^\d{1,32}$/.test(pk) || typeof u.username !== 'string' || !/^[A-Za-z0-9._]{1,30}$/.test(u.username)) return null;
+    return {
+      pk,
+      username: u.username.toLowerCase(),
+      fullName: typeof u.full_name === 'string' ? u.full_name.slice(0, 100) : '',
+      pic: typeof u.profile_pic_url === 'string' && validUrl(u.profile_pic_url) ? u.profile_pic_url : '',
+      isPrivate: u.is_private === true,
+      isVerified: u.is_verified === true
+    };
+  }
+
+  // Sleeps between pages; Cancel wakes it up early.
+  const scanPause = (s, ms) => new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    s.wake = () => { clearTimeout(timer); resolve(); };
+  });
+
+  // One page. Returns { users, next } or throws an Error with `stop` (reason) and `cool` (ms).
+  async function scanPage(s, kind, maxId) {
+    const fail = (stop, cool, detail) => Object.assign(new Error(detail || stop), { stop, cool });
+    if (Date.now() < retryAfterUntil) throw fail('cooldown', 0);
+    const url = scanPageUrl(kind, s.viewerPk, maxId);
+    s.controller = new AbortController();
+    const timer = setTimeout(() => s.controller.abort(), 8000);
+    try {
+      let res;
+      try {
+        res = await origFetch(url, { headers: apiRequestHeaders(), credentials: 'include', signal: s.controller.signal });
+      } catch (e) { throw s.cancelled ? fail('cancelled', 0) : fail('network', 60000, e.message); }
+      noteRateLimit(res);
+      if (res.status === 429) throw fail('rate-limit', 0, 'HTTP 429');
+      const text = await readResponseText(res);
+      if (s.cancelled) throw fail('cancelled', 0);
+      let data = null;
+      try { data = text == null ? null : JSON.parse(text.replace(/^\s*for\s*\(;;\);\s*/, '')); } catch (_) {}
+      const said = `${data?.message || ''} ${data?.error_type || ''} ${data?.spam ? 'spam' : ''}`;
+      if (BLOCKED.test(said) || (res.status >= 400 && BLOCKED.test(text || ''))) throw fail('blocked', 900000, `HTTP ${res.status} ${said.trim()}`);
+      if (!res.ok) throw fail('error', 60000, `HTTP ${res.status}`);
+      if (!data || data.status !== 'ok' || !Array.isArray(data.users)) throw fail('error', 60000, 'unexpected response');
+      if (data[`should_limit_list_of_${kind}`] === true) throw fail('limited', 0, `Instagram limits the ${kind} list`);
+      const next = typeof data.next_max_id === 'string' || typeof data.next_max_id === 'number' ? String(data.next_max_id) : '';
+      return { users: data.users.slice(0, 200).map(scanUser).filter(Boolean),
+        next: data.has_more !== false && next && data.users.length ? next : null };
+    } finally { clearTimeout(timer); s.controller = null; }
+  }
+
+  async function runScan(s) {
+    const lists = { followers: new Map(), following: new Map() };
+    const progress = (list) => scanSend(s, { state: 'running', list, followers: lists.followers.size,
+      following: lists.following.size, pages: s.pages, totals: s.totals });
+    try {
+      for (const kind of ['followers', 'following']) {
+        let maxId = null;
+        progress(kind);
+        do {
+          if (s.cancelled) throw Object.assign(new Error('cancelled'), { stop: 'cancelled' });
+          if (s.pages >= SCAN_PAGE_LIMIT) throw Object.assign(new Error('page limit'), { stop: 'limit' });
+          if (s.pages > 0) await scanPause(s, 2000 + Math.floor(Math.random() * 2001));
+          if (s.cancelled) throw Object.assign(new Error('cancelled'), { stop: 'cancelled' });
+          const page = await serial(() => scanPage(s, kind, maxId));
+          s.pages++;
+          for (const u of page.users) lists[kind].set(u.pk, u);
+          maxId = page.next;
+          progress(kind);
+        } while (maxId);
+        slog(`non-followers: ${kind} ${lists[kind].size} in ${s.pages} pages`);
+      }
+      const nonFollowers = [...lists.following.values()].filter((u) => !lists.followers.has(u.pk));
+      slog(`non-followers: done, ${nonFollowers.length} of ${lists.following.size} don't follow back`);
+      scanSend(s, { state: 'done', followers: lists.followers.size, following: lists.following.size,
+        pages: s.pages, totals: s.totals, users: nonFollowers });
+    } catch (e) {
+      const reason = e.stop || 'error';
+      if (e.cool) coolDown(e.cool);
+      slog(`non-followers: stopped (${reason}${e.message && e.message !== reason ? `: ${e.message}` : ''}) after ${s.pages} pages`);
+      scanSend(s, { state: reason === 'cancelled' ? 'cancelled' : 'stopped', reason, detail: String(e.message || '').slice(0, 160),
+        followers: lists.followers.size, following: lists.following.size, pages: s.pages,
+        retryAt: Date.now() < retryAfterUntil ? retryAfterUntil : null });
+    } finally {
+      if (scan === s) scan = null;
+    }
+  }
+
+  // Called for the Start button. Refuses unless this tab shows your own profile, the click just
+  // happened, and no scan or cooldown is in progress.
+  function startScan(id) {
+    if (scan) return;
+    const refuse = (reason, extra) => send({ source: 'ighd-nf', id, state: 'refused', reason, ...extra });
+    const viewerPk = cookie('ds_user_id');
+    if (!/^\d{1,32}$/.test(viewerPk) || !viewer || viewer.username !== routeUser()) return refuse('not-own-profile');
+    if (navigator.userActivation?.isActive !== true) return refuse('no-click');
+    if (Date.now() < retryAfterUntil) return refuse('cooldown', { retryAt: retryAfterUntil });
+    const totals = { followers: viewer.followers, following: viewer.following };
+    const needed = Math.ceil((totals.followers || 0) / SCAN_PAGE_SIZE) + Math.ceil((totals.following || 0) / SCAN_PAGE_SIZE);
+    if (needed > SCAN_PAGE_LIMIT) return refuse('too-large', { pages: needed, limit: SCAN_PAGE_LIMIT });
+    scan = { id, viewerPk, totals, pages: 0, cancelled: false, controller: null, wake: null };
+    slog(`non-followers: started (${totals.followers ?? '?'} followers, ${totals.following ?? '?'} following)`);
+    runScan(scan);
+  }
+
+  function cancelScan(id) {
+    if (!scan || scan.id !== id) return;
+    scan.cancelled = true;
+    scan.controller?.abort();
+    scan.wake?.();
   }
 
   // ---------- Watching the site's own requests ----------
@@ -569,6 +735,12 @@
       });
     } else if (e.data?.source === 'ighd-themes-request') {
       if (recentThemes.size) send({ source: 'ighd-themes', themes: [...recentThemes.values()] });
+    } else if (e.data?.source === 'ighd-viewer-request') {
+      if (viewer) send({ source: 'ighd-viewer', ...viewer });
+    } else if (e.data?.source === 'ighd-nf-start' && typeof e.data.id === 'string') {
+      startScan(e.data.id);
+    } else if (e.data?.source === 'ighd-nf-cancel' && typeof e.data.id === 'string') {
+      cancelScan(e.data.id);
     } else if (e.data?.source === 'ighd-log' && typeof e.data.text === 'string') {
       slog(e.data.text);
     } else if (e.data?.source === 'ighd-music-status-result'
