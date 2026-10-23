@@ -591,7 +591,8 @@
   let lastFocus = undefined;
   let lastPlayError = null;
   const musicPosts = new Map(); // includes posts without songs, so they can take over with silence
-  const userPaused = new Set(); // posts manually paused until focus moves to another post
+  // Pressing pause stops automatic playback on every post until ♪ is pressed again.
+  let pausedByUser = false;
   const watchedPosts = new Set();
 
   function stopMusic() {
@@ -706,9 +707,9 @@
   function toggleMusic(button, code) {
     if (playing?.button === button && (!player.paused || playRequest?.button === button)) {
       stopMusic();
-      userPaused.add(code);
+      pausedByUser = true;
     } else {
-      userPaused.delete(code);
+      pausedByUser = false;
       startMusic(button, code, true);
     }
   }
@@ -842,7 +843,6 @@
         // A small scroll is not a pause while the current post remains dominant.
         return;
       }
-      if (playing?.code !== code && playing) userPaused.delete(playing.code);
       if (focus.target.native) {
         stopMusic();
         return;
@@ -856,7 +856,7 @@
       if (playing?.button !== b) {
         stopMusic();
       }
-      if (!autoplayBlocked && !userPaused.has(b.dataset.code) && autoAttemptedButton !== b) {
+      if (!autoplayBlocked && !pausedByUser && autoAttemptedButton !== b) {
         // Periodic layout checks must not retry a broken media file over and over.
         autoAttemptedButton = b;
         startMusic(b, b.dataset.code, false);
@@ -886,7 +886,7 @@
     autoplayBlocked = false;
     autoAttemptedButton = null;
     const b = focusedMusicButton();
-    if (!b || userPaused.has(b.dataset.code)) return;
+    if (!b || pausedByUser) return;
     // Stay inside the trusted gesture instead of deferring play() to an animation frame.
     startMusic(b, b.dataset.code, false);
   }
@@ -915,7 +915,7 @@
       paused: player.paused, pending: playRequest?.code || null, blocked: autoplayBlocked,
       lastError: lastPlayError, userActivated: globalThis.navigator?.userActivation?.hasBeenActive ?? null,
       audioEngine: player.engine || 'page',
-      manualPause: !!focus.button && userPaused.has(focus.button.dataset.code),
+      manualPause: pausedByUser,
       dialog: !!focus.dialog, candidates: focus.candidates
     }) }, location.origin);
   });

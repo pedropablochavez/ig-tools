@@ -124,7 +124,7 @@ larger size.
 
 ## Website and store distribution
 
-Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.6.0.zip` and
+Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.6.1.zip` and
 `dist/site/`. The package contains only extension runtime assets, the license and privacy policy.
 The GitHub Pages workflow builds this same ZIP and deploys the static site on main pushes. The
 website has no analytics, third-party fonts or scripts, and no backend. GitHub serves the public site

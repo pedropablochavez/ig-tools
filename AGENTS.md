@@ -268,6 +268,14 @@ passed 11 DOM checks for placement, repeated scans, native audio rows, safe text
 also checked nested author wrappers and visually inspected the rendered header. This fixture uses
 synthetic markup, not the owner's logged-in DOM.
 
+## Sticky manual pause (v2.6.1, owner request)
+
+Pausing with ♪ now stops automatic playback on every post (`pausedByUser` in `content.js`, tab
+memory only, reset by a reload) until the owner presses ♪ again on any post; then autoplay resumes
+as before. It replaced the per-post `userPaused` set that cleared when focus moved. Test:
+"manual pause carries over to later posts" in `tests/music-autoplay.test.js`. Not yet checked in
+the owner's Brave.
+
 ## Current playback behavior (v2.3.0): no-first-click playback confirmed by owner
 
 The owner reloaded the extension and Instagram, did not click in the page or on ♪, and confirmed:

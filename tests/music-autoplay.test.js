@@ -504,19 +504,32 @@ test('Enter retries a block, while repeat keys and music controls do not', async
   await settle();
 });
 
-test('manual pause survives scroll and trusted clicks until another post takes focus', async () => {
-  const h = harness(); const a = h.add('A'); const b = h.add('B', 1000);
+test('manual pause carries over to later posts until ♪ is pressed again', async () => {
+  const h = harness(); const a = h.add('A'); const b = h.add('B', 1000); const c = h.add('C', 2000);
   h.updateFocusPlay(); h.flush(); await settle();
   h.toggleMusic(a, 'A');
   h.window.emit('scroll'); h.flush();
   h.document.emit('click', { isTrusted: true });
   assert.equal(h.player.calls, 1);
   assert.equal(h.player.paused, true);
-  a.box.top = -500; b.box.top = 0;
+  a.box.top = -1000; b.box.top = 0; c.box.top = 1000;
   h.window.emit('scroll'); h.flush(); await settle();
-  a.box.top = 0; b.box.top = 1000;
+  for (const tick of h.timers) tick(); h.flush(); await settle();
+  assert.equal(h.player.calls, 1, 'the next post must not autoplay while paused');
+  assert.equal(h.player.paused, true);
+  a.box.top = 0; b.box.top = 1000; c.box.top = 2000;
   h.window.emit('scroll'); h.flush(); await settle();
-  assert.equal(h.player.calls, 3);
+  assert.equal(h.player.calls, 1, 'returning to the paused post does not resume it either');
+  a.box.top = -1000; b.box.top = 0; c.box.top = 1000;
+  h.window.emit('scroll'); h.flush(); await settle();
+  h.toggleMusic(b, 'B'); await settle();
+  assert.equal(h.player.calls, 2);
+  assert.equal(h.player.paused, false);
+  assert.match(h.player.src, /B\.m4a$/);
+  b.box.top = -1000; c.box.top = 0;
+  h.window.emit('scroll'); h.flush(); await settle();
+  assert.equal(h.player.calls, 3, 'pressing play turns automatic playback back on');
+  assert.match(h.player.src, /C\.m4a$/);
   assert.equal(h.player.paused, false);
 });
 
