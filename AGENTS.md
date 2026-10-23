@@ -201,6 +201,9 @@ the site; extension media never goes there. `distribution.json` keeps the Chrome
 until the owner has a real approved listing. Setting it switches the main CTA to the store.
 
 `.github/workflows/pages.yml` tests, builds and deploys main pushes using official GitHub actions.
+The site only updates when main is **pushed** (a local-only commit left it on an old version once).
+The build adds `?v=<version>-<zip hash>-<asset hash>` to config.js / app.js / styles.css / the ZIP
+link so Pages' 10-minute cache cannot show an old version or ZIP after a deploy.
 Generated ZIPs / site output stay in ignored dist/, never in the extension or source history.
 `store/LISTING.md` contains submission copy, permission explanations and reviewer steps;
 `store/PUBLISHING.md` describes remaining owner account / review steps. `store/assets/` has original

@@ -98,6 +98,13 @@ def build():
     template = (ROOT / "site/privacy.template.html").read_text(encoding="utf-8")
     (SITE / "privacy.html").write_text(template.replace("<!-- POLICY -->", policy), encoding="utf-8")
     (SITE / "privacy.template.html").unlink()
+    # Pages caches files for 10 minutes; versioned URLs make each deploy show the new main build at once.
+    stamp = f"{version}-{digest[:12]}-{hashlib.sha256((SITE / 'app.js').read_bytes() + (SITE / 'styles.css').read_bytes()).hexdigest()[:8]}"
+    for page in ("index.html", "privacy.html"):
+        path = SITE / page
+        text = path.read_text(encoding="utf-8")
+        text = re.sub(r'((?:src|href)=")(config\.js|app\.js|styles\.css|downloads/ig-tools\.zip)(")', rf"\g<1>\g<2>?v={stamp}\g<3>", text)
+        path.write_text(text, encoding="utf-8")
     print(json.dumps({"version": version, "package": str(package), "bytes": package.stat().st_size,
                       "sha256": digest, "site": str(SITE), "store_url": store_url}, indent=2))
 
