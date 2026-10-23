@@ -26,6 +26,9 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
 - **Follows you / Doesn't follow you** label next to the username on other people's profiles. It uses
   the relationship the profile page already loaded, so it adds no requests. Nothing is shown on your
   own profile or when the page has not provided the relationship.
+- **Chat themes** in direct messages: the conversation's theme from the mobile app (background image,
+  bubble and text colors, light / dark variant) is shown on the website, which otherwise leaves it out
+  for some accounts. Chats without a theme are unchanged.
 - **♪ Music** on photo posts that have a song attached (as in the mobile app): like reels, the song of the
   post you are looking at plays (the exact clip the author picked, in a loop). It keeps playing as you
   scroll while its photo remains visible and dominant, then switches when the next post fills about
@@ -76,7 +79,10 @@ without affecting the website's original response.
   browse normally, looking only for profile picture, post, story and post music URLs, and asks for a
   post's details when the feed lacks them. It also reads song / original audio credits and whether a
   user follows you from those same responses; displaying them does not make additional requests.
-- `content.js` shows the buttons, audio credits, the follows-you label and the viewer, using the data for the profile or post
+  When you open a conversation, it turns on the flag in the site's own conversation request that
+  asks Instagram to include the chat's theme (the website has this feature but may leave it off).
+  No extra request is made; only that request's theme flag changes.
+- `content.js` shows the buttons, audio credits, the follows-you label, chat themes and the viewer, using the data for the profile or post
   you are looking at.
 - `music-player.js` first uses page audio, then switches to an extension-owned player if the page
   returns `NotAllowedError`. It keeps the same volume, clip position and play / pause controls.
@@ -96,7 +102,7 @@ larger size.
 
 ## Website and store distribution
 
-Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.4.0.zip` and
+Run `python scripts/build_distribution.py` (Python 3.9+) to build `dist/ig-tools-v2.5.0.zip` and
 `dist/site/`. The package contains only extension runtime assets, the license and privacy policy.
 The GitHub Pages workflow builds this same ZIP and deploys the static site on main pushes. The
 website has no analytics, third-party fonts or scripts, and no backend. GitHub serves the public site

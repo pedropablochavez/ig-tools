@@ -1,7 +1,8 @@
 // Runs inside the page itself (world: MAIN) from the very start.
 // It passively reads the responses the site already downloads on its own while you browse
-// and picks out media / audio data and whether each user follows you. Its only own request
-// is a queued post-detail lookup.
+// and picks out media / audio data, whether each user follows you, and chat themes. Its only own
+// request is a queued post-detail lookup. It also asks the site's own conversation request to
+// include the chat's theme, which the website leaves out for some accounts.
 // Temporary data goes only to content.js, in the same tab.
 (() => {
   'use strict';
@@ -170,6 +171,59 @@
     return { code, username, items, music: findMusic(node), audio: findAudioDetails(node) };
   }
 
+  // ---------- Chat themes ----------
+  // The website has chat themes but, behind an experiment, may leave them out of its own
+  // conversation request. Setting that request's flag makes the same request include them.
+  const THEME_FLAG = '__relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider';
+  // Accepts the body types the site uses (string, URLSearchParams, FormData); returns a new body
+  // only when the flag is present and off, never altering the site's own object.
+  function withChatThemes(body) {
+    try {
+      if (typeof body === 'string' && !body.includes('ChatThemesQE')) return body;
+      const form = typeof FormData !== 'undefined' && body instanceof FormData;
+      if (typeof body !== 'string' && !form && !(body instanceof URLSearchParams)) return body;
+      const text = typeof body === 'string' ? new URLSearchParams(body).get('variables') : body.get('variables');
+      if (typeof text !== 'string' || !text.includes('ChatThemesQE')) return body;
+      const vars = JSON.parse(text);
+      if (vars?.[THEME_FLAG] !== false) return body;
+      vars[THEME_FLAG] = true;
+      if (!form) {
+        const params = new URLSearchParams(body);
+        params.set('variables', JSON.stringify(vars));
+        return typeof body === 'string' ? params.toString() : params;
+      }
+      const copy = new FormData();
+      for (const [k, v] of body.entries()) copy.append(k, k === 'variables' ? JSON.stringify(vars) : v);
+      return copy;
+    } catch (_) { return body; }
+  }
+  // The conversation request often finishes before content.js starts listening; keep recent
+  // themes so it can ask for them.
+  const recentThemes = new Map();
+
+  const THEME_COLORS = ['gradient_colors', 'incoming_message_bubble_color', 'inbound_message_text_color',
+    'outbound_message_text_color', 'thread_background_color'];
+  // One light / dark variant: ARGB hex colors and an optional background image.
+  function themeVariant(t) {
+    if (!t || typeof t !== 'object') return null;
+    const argb = (v) => typeof v === 'string' && /^[0-9a-f]{8}$/i.test(v) ? v.toUpperCase() : null;
+    const v = { mode: t.app_color_mode === 'DARK' ? 'dark' : 'light' };
+    for (const key of THEME_COLORS) {
+      v[key] = key === 'gradient_colors'
+        ? (Array.isArray(t.gradient_colors) ? t.gradient_colors.map(argb).filter(Boolean).slice(0, 8) : [])
+        : argb(t[key]);
+    }
+    const bg = t.thread_background_asset?.url_1024 || t.thread_background_asset?.url_480;
+    v.background = typeof bg === 'string' && validUrl(bg) && /^https:/.test(bg) ? bg : null;
+    return v;
+  }
+  function toTheme(data) {
+    if (!data || typeof data !== 'object') return null;
+    const variants = [data, ...(Array.isArray(data.alternative_themes) ? data.alternative_themes : [])]
+      .slice(0, 4).map(themeVariant).filter(Boolean);
+    return variants.length ? { variants } : null;
+  }
+
   function collect(node, out, depth, budget = { left: 20000 }) {
     if (!node || typeof node !== 'object' || depth > 60 || --budget.left < 0) return;
     if (Array.isArray(node)) {
@@ -192,6 +246,10 @@
           followedBy
         });
       }
+    }
+    // A conversation: thread_key is the id in /direct/t/<id>/. A null theme means "no theme".
+    if ('theme_data' in node && typeof node.thread_key === 'string' && /^\d{5,32}$/.test(node.thread_key)) {
+      out.themes.push({ thread: node.thread_key, theme: toTheme(node.theme_data) });
     }
     const code = node.code || node.shortcode;
     if (typeof code === 'string' && /^[A-Za-z0-9_-]{5,}$/.test(code)) {
@@ -238,9 +296,9 @@
   function handleText(text, req) {
     if (typeof text !== 'string' || text.length > MAX_RESPONSE_BYTES) return false;
     stats.responses++;
-    if (!/profile_pic_url|image_versions2|video_versions|display_url|music|audio|followed_by/.test(text)) return;
+    if (!/profile_pic_url|image_versions2|video_versions|display_url|music|audio|followed_by|theme_data/.test(text)) return;
     stats.withPics++;
-    const out = { pics: [], media: [], items: [], friendships: [] };
+    const out = { pics: [], media: [], items: [], friendships: [], themes: [] };
     const budget = { left: 20000 };
     for (const obj of parseAll(text)) { if (budget.left <= 0) break; collect(obj, out, 0, budget); }
     publish(out);
@@ -257,7 +315,7 @@
 
   function handleObject(obj, req) {
     stats.responses++;
-    const out = { pics: [], media: [], items: [], friendships: [] };
+    const out = { pics: [], media: [], items: [], friendships: [], themes: [] };
     collect(obj, out, 0);
     publish(out);
     logSongs(out.media, req);
@@ -267,12 +325,14 @@
     window.postMessage(msg, location.origin);
   }
 
-  function publish({ pics, media, items, friendships }) {
+  function publish({ pics, media, items, friendships, themes }) {
     for (const p of pics) remember(stats.users, p.username, null, 1000);
     if (pics.length) send({ source: 'ighd-pics', pics });
     if (media.length) send({ source: 'ighd-media', media });
     if (items.length) send({ source: 'ighd-items', items });
     if (friendships.length) send({ source: 'ighd-friendship', friendships });
+    for (const t of themes) remember(recentThemes, t.thread, t, 200);
+    if (themes.length) send({ source: 'ighd-themes', themes });
   }
 
   // Data embedded in the HTML on page load.
@@ -400,6 +460,10 @@
   let passiveReads = 0;
   window.fetch = async function (...args) {
     const a = args[0];
+    if (args[1]?.body != null) {
+      const body = withChatThemes(args[1].body);
+      if (body !== args[1].body) args[1] = { ...args[1], body };
+    }
     const init = args[1] || {};
     let req = null;
     try {
@@ -450,6 +514,7 @@
     return origSetHeader.call(this, k, v);
   };
   XMLHttpRequest.prototype.send = function (body) {
+    body = withChatThemes(body);
     if (this.__igt) {
       this.__igt.body = bodyText(body);
       noteApiHeaders(this.__igt.url, this.__igt.headers);
@@ -467,6 +532,8 @@
         withPics: stats.withPics,
         users: stats.users.size
       });
+    } else if (e.data?.source === 'ighd-themes-request') {
+      if (recentThemes.size) send({ source: 'ighd-themes', themes: [...recentThemes.values()] });
     } else if (e.data?.source === 'ighd-log' && typeof e.data.text === 'string') {
       slog(e.data.text);
     } else if (e.data?.source === 'ighd-music-status-result'

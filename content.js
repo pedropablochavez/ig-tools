@@ -1351,6 +1351,157 @@
     return document.querySelector('dialog[open]') || document.body;
   }
 
+  // ---------- Chat themes ----------
+  // The open conversation's theme, from the site's own conversation data: its background, and
+  // bubble / text colors set through the site's own color variables.
+
+  const chatThemes = new Map();
+  window.addEventListener('message', (e) => {
+    if (!fromPage(e) || e.data?.source !== 'ighd-themes' || !Array.isArray(e.data.themes)) return;
+    for (const t of e.data.themes) {
+      if (typeof t?.thread !== 'string' || !/^\d{5,32}$/.test(t.thread)) continue;
+      const variants = Array.isArray(t.theme?.variants) ? t.theme.variants.filter((v) => v && typeof v === 'object') : [];
+      remember(chatThemes, t.thread, variants.length ? variants : null, 200);
+    }
+    updateChatTheme();
+  });
+  // Themes that arrived before this script started.
+  window.postMessage({ source: 'ighd-themes-request' }, location.origin);
+
+  // The site sends colors as ARGB hex ("FF892320").
+  const argbCss = (v) => typeof v === 'string' && /^[0-9A-F]{8}$/i.test(v) ? `#${v.slice(2)}${v.slice(0, 2)}` : null;
+  const argbRgb = (v) => argbCss(v) && [2, 4, 6].map((i) => parseInt(v.slice(i, i + 2), 16)).join(', ');
+  const themeImage = (u) => {
+    try {
+      const url = new URL(u);
+      return url.protocol === 'https:' && /(^|\.)(cdninstagram\.com|fbcdn\.net)$/.test(url.hostname)
+        && !/["'()\\\s]/.test(u) ? u : null;
+    } catch (_) { return null; }
+  };
+
+  const themeStyle = document.createElement('style');
+  themeStyle.id = 'ighd-chat-theme';
+  const BACKDROP_PROPS = ['backgroundColor', 'backgroundImage', 'backgroundSize', 'backgroundPosition'];
+  const bubbleClasses = { out: null, in: null };
+  let themed = null;
+
+  function themeVars(v) {
+    const out = v.gradient_colors?.[0], inc = v.incoming_message_bubble_color;
+    return {
+      '--chat-outgoing-message-bubble-background-color': argbCss(out),
+      '--ig-outgoing-message-bubble': argbRgb(out),
+      '--chat-incoming-message-bubble-background-color': argbCss(inc),
+      '--ig-incoming-message-bubble': argbRgb(inc)
+    };
+  }
+
+  function clearChatTheme() {
+    if (!themed) return;
+    for (const name of Object.keys(themeVars({}))) themed.root.style.removeProperty(name);
+    delete themed.root.dataset.ighdTheme;
+    for (const p of BACKDROP_PROPS) themed.backdrop.style[p] = themed.saved[p];
+    themeStyle.remove();
+    themed = null;
+  }
+
+  // The conversation pane (around the message box) and its message list, the tallest scrolling area.
+  function chatParts() {
+    const box = document.querySelector('main [role="textbox"], [role="main"] [role="textbox"]');
+    if (!box) return null;
+    let root = box;
+    while (root.parentElement && root.getBoundingClientRect().height < innerHeight * 0.5) root = root.parentElement;
+    let list = null, best = 0;
+    for (const el of root.querySelectorAll('div')) {
+      if (el.clientHeight <= best || el.scrollHeight <= el.clientHeight) continue;
+      if (!/(auto|scroll)/.test(getComputedStyle(el).overflowY)) continue;
+      list = el; best = el.clientHeight;
+    }
+    return list && { root, list, backdrop: list.parentElement || list };
+  }
+
+  // Text colors have no variable: find the site's class that paints each bubble color, by giving
+  // that class to a test element. Class names stay valid for the page's current stylesheets.
+  function findBubbleClasses(list, vars) {
+    const probe = document.createElement('div');
+    list.appendChild(probe);
+    const wanted = {};
+    for (const side of missingBubbleClasses(vars)) {
+      probe.style.backgroundColor = vars[BUBBLE_VARS[side]];
+      wanted[side] = getComputedStyle(probe).backgroundColor;
+    }
+    probe.style.backgroundColor = '';
+    for (const el of list.querySelectorAll('div')) {
+      if (el === probe || el.offsetHeight < 20 || !el.textContent.trim()) continue;
+      const bg = getComputedStyle(el).backgroundColor;
+      const side = Object.keys(wanted).find((k) => !bubbleClasses[k] && wanted[k] === bg);
+      if (!side) continue;
+      for (const c of el.classList) {
+        if (!/^[\w-]+$/.test(c)) continue;
+        probe.className = c;
+        if (getComputedStyle(probe).backgroundColor === bg) { bubbleClasses[side] = c; break; }
+      }
+      if (!missingBubbleClasses(vars).length) break;
+    }
+    probe.remove();
+  }
+  const BUBBLE_VARS = {
+    out: '--chat-outgoing-message-bubble-background-color',
+    in: '--chat-incoming-message-bubble-background-color'
+  };
+  const missingBubbleClasses = (vars) => ['out', 'in'].filter((side) => !bubbleClasses[side] && vars[BUBBLE_VARS[side]]);
+
+  function themeCss(v) {
+    const rules = [];
+    const text = { out: argbCss(v.outbound_message_text_color), in: argbCss(v.inbound_message_text_color) };
+    for (const side of ['out', 'in']) {
+      const c = bubbleClasses[side];
+      if (!c) continue;
+      // Bubbles carry a thick outline in the page's background color (it shapes grouped corners);
+      // over a theme background it shows as a dark box around each message.
+      rules.push(`[data-ighd-theme] .${c} { outline-color: transparent !important; }`);
+      if (text[side]) rules.push(`[data-ighd-theme] .${c}, [data-ighd-theme] .${c} * { color: ${text[side]} !important; }`);
+    }
+    const stops = (v.gradient_colors || []).map(argbCss).filter(Boolean);
+    if (bubbleClasses.out && stops.length > 1) {
+      rules.push(`[data-ighd-theme] .${bubbleClasses.out} { background-image: linear-gradient(${stops.join(', ')}) !important; }`);
+    }
+    return rules.join('\n');
+  }
+
+  function updateChatTheme() {
+    const id = location.pathname.match(/^\/direct\/t\/(\d{5,32})/)?.[1];
+    const variants = id && chatThemes.get(id);
+    if (!variants) { clearChatTheme(); return; }
+    const html = document.documentElement;
+    const dark = html.classList.contains('__fb-dark-mode') || /dark/.test(getComputedStyle(html).colorScheme);
+    const v = variants.find((x) => x.mode === (dark ? 'dark' : 'light')) || variants[0];
+    const key = `${id}:${v.mode}`;
+    if (themed && (themed.key !== key || !themed.root.isConnected || !themed.list.isConnected)) clearChatTheme();
+    if (!themed) {
+      const parts = chatParts();
+      if (!parts) return;
+      const saved = {};
+      for (const p of BACKDROP_PROPS) saved[p] = parts.backdrop.style[p];
+      themed = { key, ...parts, saved, divs: -1 };
+      const vars = themeVars(v);
+      for (const [name, value] of Object.entries(vars)) if (value) themed.root.style.setProperty(name, value);
+      themed.root.dataset.ighdTheme = '';
+      const image = themeImage(v.background || '');
+      const color = argbCss(v.thread_background_color);
+      if (color) themed.backdrop.style.backgroundColor = color;
+      if (image) Object.assign(themed.backdrop.style, { backgroundImage: `url("${image}")`, backgroundSize: 'cover', backgroundPosition: 'center' });
+    }
+    // Bubbles render after the pane; look again only when the list's content changed.
+    const vars = themeVars(v);
+    if (missingBubbleClasses(vars).length) {
+      const count = themed.list.getElementsByTagName('div').length;
+      if (count !== themed.divs) { themed.divs = count; findBubbleClasses(themed.list, vars); }
+    }
+    const css = themeCss(v);
+    if (themeStyle.textContent !== css) themeStyle.textContent = css;
+    if (!themeStyle.isConnected) document.head.appendChild(themeStyle);
+  }
+
   // ---------- "Follows you" label ----------
 
   const followBadge = document.createElement('span');
@@ -1397,6 +1548,7 @@
       storyBtn.remove();
     }
     updateFollowBadge();
+    updateChatTheme();
     if (location.pathname === lastPath && (btn.isConnected || !getUsername())) return;
     lastPath = location.pathname;
     if (getUsername()) {

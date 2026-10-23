@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const config = window.IG_TOOLS || {};
-  for (const node of document.querySelectorAll('[data-version]')) node.textContent = `v${config.version || '2.4.0'}`;
+  for (const node of document.querySelectorAll('[data-version]')) node.textContent = `v${config.version || '2.5.0'}`;
   if (config.zipBytes) for (const node of document.querySelectorAll('[data-zip-size]')) node.textContent = `${new Intl.NumberFormat('en').format(Math.ceil(config.zipBytes / 1024))} KB ZIP`;
   // Browser detection is local; this script sends no telemetry or network requests.
   const addresses = { brave: 'brave://extensions', chrome: 'chrome://extensions', edge: 'edge://extensions' };

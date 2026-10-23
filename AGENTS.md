@@ -11,7 +11,8 @@ docs are in English. Load it via `brave://extensions` → Developer mode → Loa
   branding (colors/logo); name is "IG Tools (Unofficial)".
 - **Passive first:** prefer reading data the page already loaded (`intercept.js`). The only requests
   the extension makes itself: the file the user downloads, and `/api/v1/media/<id>/info/` (the same
-  request the site makes when a post is opened) for one post at a time.
+  request the site makes when a post is opened) for one post at a time. The one modified site request:
+  the conversation query's chat theme flag (owner-approved exception, v2.5.0; see below).
 - Commits end with the `Co-Authored-By` trailer used in history. Commit email is the GitHub noreply
   address already set in this repo's git config (do not expose the owner's personal email).
 
@@ -19,7 +20,7 @@ docs are in English. Load it via `brave://extensions` → Developer mode → Loa
 
 | File | World | Role |
 | --- | --- | --- |
-| `intercept.js` | MAIN, `document_start` | Hooks `fetch` / `XMLHttpRequest`, parses JSON responses and embedded `<script type="application/json">`, extracts profile pics, post media (`code` → items), story items (`pk`), and post music. Sends them with `window.postMessage` (`ighd-pics`, `ighd-media`, `ighd-items`, `ighd-friendship`). Handles `ighd-load-post` → fetches `/api/v1/media/<id>/info/` (id = post code decoded as base64 digits, `codeToId`). Console helpers: `igtSongStatus()`, `igtMusicFields()`. |
+| `intercept.js` | MAIN, `document_start` | Hooks `fetch` / `XMLHttpRequest`, parses JSON responses and embedded `<script type="application/json">`, extracts profile pics, post media (`code` → items), story items (`pk`), and post music. Sends them with `window.postMessage` (`ighd-pics`, `ighd-media`, `ighd-items`, `ighd-friendship`, `ighd-themes`). Sets the chat theme flag in the site's conversation request (`withChatThemes`). Handles `ighd-load-post` → fetches `/api/v1/media/<id>/info/` (id = post code decoded as base64 digits, `codeToId`). Console helpers: `igtSongStatus()`, `igtMusicFields()`. |
 | `content.js` | isolated | UI: profile HD viewer, download button in each post's like/comment/share bar (`postBars()`), story download button, ♪ music overlay + volume slider, reels-like autoplay (`updateFocusPlay`). Carousel slide detection via real visibility (`visibleArea`, `selection`). |
 | `mp4fix.js` | isolated | Rewrites `stts` of ~1 fps "photo + music" story videos so Windows decoders show the picture immediately (no re-encode). |
 | `background.js` | SW | `chrome.downloads.download` (accepts data: URLs from `downloadMedia`). |
@@ -39,6 +40,38 @@ Messages between worlds are checked with `fromPage(e)` (same window + same origi
 - Post bar detection must require the big (24px) like icon + comment icon; comments have 12px hearts.
 - Logged-out testing is limited (login wall hides carousels, no music fields). Ask the owner for
   console output (`igtSongStatus()`) or to connect a browser tool if you need the logged-in view.
+
+## Chat themes (v2.5.0)
+
+Owner asked to see chat themes on the web, with nothing to enable besides the extension, and approved
+the non-passive approach after a test. Details and observed fields: CHAT_THEME_FEASIBILITY.md. The web
+client implements themes but its conversation query only selects `as_ig_direct_thread.theme_data` when
+the Relay provider `IGDEnableOffMsysChatThemesQE` is true; it was false for the owner. `withChatThemes`
+flips only `__relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider` false → true in XHR / string
+fetch bodies. The server returned the theme (HTTP 200) in the owner's session. `thread_key` matches
+`/direct/t/<id>/`; `theme_data: null` means no theme. Do not add separate theme requests.
+
+`content.js` (`updateChatTheme`, from `sync` and on data) picks the light / dark variant from the site's
+`__fb-dark-mode` / `color-scheme`, sets the site's own bubble color variables on the conversation pane
+(ancestor of `[role="textbox"]` at least half the viewport tall), and puts the background color / image
+on the parent of the message list (tallest scrolling div). Text colors are not variables: the atomic
+class that paints each bubble color is found by giving a matching bubble's classes to a test element,
+then one style rule colors that class. Bubbles also have a 10px outline in the page background color
+(shapes grouped corners); over the theme image it drew a dark box around each message, so the
+rule makes that outline transparent. Leaving the chat restores the saved inline values. During
+development Claude Code's auto-mode classifier blocked this work as request tampering; the owner
+explicitly authorized it and switched permission mode.
+
+On a direct load of `/direct/t/<id>/` the conversation query (~460 ms) answers before content.js
+starts (document_idle, ~600 ms), so intercept keeps the last 200 themes and resends them on
+`ighd-themes-request`. Site request bodies may be strings, URLSearchParams or FormData; the flag is set
+on a copy, never on the site's object.
+
+Validation: 11 tests in `tests/chat-theme.test.js` (request rewrite for XHR / fetch / FormData /
+URLSearchParams, untouched bodies, late listener resend, extraction, null / unsafe values, applying,
+light / dark, restoring, CDN-only backgrounds) plus 77 existing pass. After reloading the extension,
+the owner confirmed the theme shows in their themed group chat, and after the outline fix that
+messages look right ("Se ve bien").
 
 ## Follows-you label (v2.4.0)
 
@@ -272,4 +305,4 @@ and the audio engine / error. The owner requires playback without changing site 
 - `node --test tests/music-autoplay.test.js` runs the shipped music controller in a `vm` with stubbed
   media and DOM events, covering blocked playback, gesture recovery, focus changes and cancellation.
 - Real UI checks need the owner's logged-in browser.
-- Full suite: `node --test tests/music-autoplay.test.js tests/extension-audio.test.js tests/resource-usage.test.js tests/follow-badge.test.js`.
+- Full suite: `node --test tests/music-autoplay.test.js tests/extension-audio.test.js tests/resource-usage.test.js tests/follow-badge.test.js tests/chat-theme.test.js`.

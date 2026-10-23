@@ -14,6 +14,11 @@
 - **Follows-you label.** On another person's profile, the extension shows whether that account follows
   you, using the relationship the profile page already loaded. It makes no extra request, and this
   status is kept only in memory in the current tab (up to 500 recent profiles).
+- **Chat themes.** When you open a direct-message conversation, the extension turns on the flag in the
+  website's own conversation request that asks Instagram to include that chat's theme. No other
+  request is made and nothing else in the request changes. The theme's colors and background image
+  (loaded from Instagram's media servers) are shown only in your tab and kept in memory for up to
+  200 recent conversations. Message contents are not read for this feature.
 - **Internal audio player.** If a page requires a first click before playing sound, the extension may
   pass the selected audio URL, clip timing and volume to its own packaged offscreen document. Audio
   still loads directly from the site's media servers; no third-party service or embedded site is used.
