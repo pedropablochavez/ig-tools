@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>IG Tools (Unofficial) — Photos. With sound.</title>
-  <meta name="description" content="Photo-post music, full-size profile photos and media downloads for Instagram on desktop. Free, open source and unofficial. Download from GitHub.">
+  <title>IG Tools (Unofficial) — A better Instagram on PC</title>
+  <meta name="description" content="Improve Instagram on PC with follow-back checks, photo music, downloads, full-size profile photos and chat themes. Free, open source and unofficial.">
   <meta name="theme-color" content="#111111">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <link rel="icon" href="assets/icon128.png">
@@ -16,33 +16,46 @@
   <a class="skip" href="#main">Skip to content</a>
   <header class="topbar shell">
     <a class="brand" href="./" aria-label="IG Tools (Unofficial) home" translate="no"><img src="assets/icon128.png" width="36" height="36" alt=""><span>IG Tools <small>(Unofficial)</small></span></a>
-    <nav aria-label="Main navigation"><a href="#features">Features</a><a href="#install">Install</a><a href="https://github.com/pedropablochavez/ig-tools">GitHub</a></nav>
+    <nav aria-label="Main navigation"><a href="#features">Features</a><a href="#non-followers">Follow-backs</a><a href="#install">Install</a><a href="https://github.com/pedropablochavez/ig-tools">GitHub</a></nav>
   </header>
   <main id="main">
     <section class="hero shell" aria-labelledby="hero-heading">
       <div class="hero-copy">
-        <h1 id="hero-heading" data-enter>Photos.<br>With sound.</h1>
-        <p class="intro" data-enter>Photo-post music, full-size profile photos and media downloads for Instagram on your desktop.</p>
+        <h1 id="hero-heading" data-enter><span>Instagram on PC.</span><span>Made better.</span></h1>
+        <p class="intro" data-enter>Add photo music, media downloads, chat themes and follow-back checks to Instagram in your desktop browser.</p>
         <div class="hero-actions" data-enter><a class="button primary" data-install-link href="downloads/ig-tools.zip" download>Download extension <span aria-hidden="true">↓</span></a><a class="text-link" href="#install">Installation guide</a></div>
         <p class="install-note" data-install-note data-enter>Free. Manual installation for Brave, Chrome &amp; Edge.</p>
         <p class="mobile-note" hidden>This extension needs a desktop browser. Open this page on your computer to install it.</p>
-        <p class="source-note" data-enter>Open source. No analytics.<br>No extra account to create.</p>
+        <p class="source-note" data-enter>Open source. No analytics. No extra account.</p>
       </div>
       <figure class="hero-demo" data-enter>
         <div class="demo-stage" data-ui>
-          <img src="assets/feed-demo.png" width="500" height="614" fetchpriority="high" alt="Bundled extension demo: a photo post with song credits, a pause control and a download button.">
-          <div class="demo-overlay" role="group" aria-label="Choose a feature preview" hidden><button type="button" data-preview="feed" aria-pressed="true">Photo music</button><button type="button" data-preview="profile" aria-pressed="false">Profile viewer</button></div>
+          <img src="assets/nonfollowers-demo.png" width="500" height="520" fetchpriority="high" alt="Actual IG Tools non-followers panel with 3 fictional accounts, Keep controls, a verified filter and CSV export.">
+          <div class="demo-overlay" role="group" aria-label="Choose a feature preview" hidden><button type="button" data-preview="followers" aria-pressed="true">Follow-backs</button><button type="button" data-preview="feed" aria-pressed="false">Photo music</button><button type="button" data-preview="profile" aria-pressed="false">Profile viewer</button></div>
         </div>
-        <figcaption><span id="demo-state" role="status" aria-live="polite">Photo-post music preview.</span> No sound plays here.<br>Fictional account, audio credits &amp; original sample artwork.</figcaption>
+        <figcaption><span id="demo-state" role="status" aria-live="polite">Non-followers results preview.</span><br>Actual extension controls. Fictional accounts &amp; sample content.<br>No scan runs or sound plays on this page.</figcaption>
       </figure>
     </section>
-    <section class="showcase shell" id="features" aria-labelledby="features-heading">
-      <h2 id="features-heading" class="axis" data-reveal>Right where you scroll</h2>
-      <div class="feature-row">
+    <section class="desktop-section" id="features" aria-labelledby="features-heading"><div class="shell desktop-layout">
+      <h2 id="features-heading" data-reveal>A desktop with<br>fewer limits</h2>
+      <div><p data-reveal>Instagram’s web experience leaves useful things out. IG Tools adds them to the feed, profiles and conversations you already use.</p>
+        <nav class="feature-links" aria-label="Explore the improvements" data-reveal><a href="#non-followers">Who follows back</a><a href="#photo-music">Photo music</a><a href="#downloads">Media downloads</a><a href="#chat-themes">Chat themes</a></nav>
+      </div>
+    </div></section>
+    <section class="follow-section shell" id="non-followers" aria-labelledby="followers-heading">
+      <div class="follow-intro"><h2 id="followers-heading" data-reveal>See who follows back</h2><p class="follow-lead" data-reveal>You still follow them.<br>They don’t follow you.</p></div>
+      <div class="follow-details"><p data-reveal>Find the accounts you follow that don’t follow you back. Start a scan from your own profile, keep browsing while it runs, then review the results or export a CSV.</p>
+        <dl class="follow-options" data-reveal><div><dt>Keep your exceptions</dt><dd>Whitelist accounts you follow on purpose. Hide verified accounts, or include them when you want.</dd></div><div><dt>Know at a glance</dt><dd>A “Follows you” or “Doesn’t follow you” label appears on profiles when the page provides that information.</dd></div></dl>
+        <p class="feature-note" data-reveal>Compares your current lists; it doesn’t track when someone unfollowed you or unfollow anyone for you. Scanning may trigger Instagram limits. <a href="#scan-risk">Read before scanning</a>.</p>
+      </div>
+    </section>
+    <section class="showcase shell" aria-labelledby="extras-heading">
+      <h2 id="extras-heading" class="axis" data-reveal>More in every scroll</h2>
+      <div class="feature-row" id="photo-music">
         <div class="feature-copy" data-reveal><h3>Let the photo play</h3><p>Music starts with the photo in focus. Scroll to the next post and its soundtrack takes over. Leave the post or hide the tab, and playback stops.</p><p>Song and artist credits sit below the author. Pause or adjust the volume whenever you like.</p></div>
         <figure class="fragment fragment-audio" data-ui data-reveal><img src="assets/audio-demo.png" width="500" height="92" loading="lazy" alt="Actual audio credit row: Daylight by Sample artist, placed above Suggested for you."><figcaption>Audio credits, in the post header.</figcaption></figure>
       </div>
-      <div class="feature-row">
+      <div class="feature-row" id="downloads">
         <div class="feature-copy" data-reveal><h3>Save the slide you see</h3><p>Download a photo, video or story from its own controls. In a carousel, the download follows the slide you’re viewing.</p><p>Files come from the original media servers, in the best version available to your session.</p></div>
         <figure class="fragment fragment-save" data-ui data-reveal><img src="assets/download-demo.png" width="500" height="122" loading="lazy" alt="Actual post action bar with the extension’s download control beside the native actions."><figcaption>The download control stays with the post.</figcaption></figure>
       </div>
@@ -51,6 +64,10 @@
         <figure class="fragment fragment-profile" data-ui data-reveal><img src="assets/profile-demo.png" width="660" height="720" loading="lazy" alt="Actual full-size photo viewer with Download, Open and Close controls."><figcaption>Full-size profile viewer.</figcaption></figure>
       </div>
     </section>
+    <section class="chat-section" id="chat-themes" aria-labelledby="chat-heading"><div class="shell chat-layout">
+      <h2 id="chat-heading" data-reveal>Bring your chat theme</h2>
+      <div><p data-reveal>The theme already set for a conversation on mobile can show up on your desktop, too: its background, message colors and composer.</p><p data-reveal>Open a themed conversation and IG Tools applies its existing theme. Nothing extra to turn on.</p></div>
+    </div></section>
     <section class="install-section" id="install" aria-labelledby="install-heading"><div class="shell install-layout">
       <div class="install-intro"><h2 id="install-heading" data-reveal>Make it yours</h2><p id="install-method" data-reveal>Download from GitHub and load it into your browser. There’s no Chrome Web Store listing yet.</p><a class="button primary" data-install-link href="downloads/ig-tools.zip" download data-reveal>Download extension <span aria-hidden="true">↓</span></a><p class="package-info" data-reveal><span data-version></span>, <span data-zip-size>small ZIP download</span><br>Desktop Chromium 116 or newer.</p><a class="text-link" href="downloads/SHA256SUMS.txt">Verify the checksum</a></div>
       <div class="install-guide">
@@ -64,13 +81,16 @@
     </div></section>
     <section class="privacy-section shell" aria-labelledby="privacy-heading"><div class="axis letter">
       <h2 id="privacy-heading" data-reveal>Your feed stays yours</h2>
-      <p data-reveal>IG Tools runs in your browser. It has no analytics, ads or developer servers. It reads data the page already loads and can request details for one post at a time from Instagram.</p>
-      <p data-reveal>Media loads directly from the original servers. Music and downloads use data; temporary caches are bounded, and playback releases its source when it stops.</p>
+      <p data-reveal>IG Tools runs in your browser, with no analytics, ads or developer servers. It reads data Instagram already loads and can request details for one post at a time.</p>
+      <p data-reveal>A non-followers scan starts only when you click Start scan and reads your own lists from Instagram. Results stay in the tab; your whitelist and verified-account preference stay in the extension on your computer.</p>
+      <p data-reveal>Media comes directly from its original servers. Chat themes use a flag in Instagram’s existing conversation request. Music and downloads use data; temporary caches are bounded.</p>
       <p data-reveal>The project is independent and unofficial. It doesn’t bypass access restrictions, and downloading a file doesn’t grant rights to reuse it.</p>
       <div class="letter-links" data-reveal><a class="text-link" href="privacy.html">Privacy policy</a><a class="text-link" href="https://github.com/pedropablochavez/ig-tools">Read the source</a></div>
     </div></section>
     <section class="faq shell" aria-labelledby="faq-heading"><h2 id="faq-heading" data-reveal>Before you install</h2><div class="questions">
-      <details name="questions" open data-reveal><summary>Why is installation manual?</summary><p>The extension is currently distributed on GitHub. Download the ZIP and use Developer mode to load it. A normal website cannot silently install a browser extension.</p></details>
+      <details name="questions" open data-reveal><summary>Can I see who unfollowed me?</summary><p>You can see which accounts you currently follow don’t follow you back. That can include someone who unfollowed you while you still follow them, but IG Tools keeps no history, so it can’t tell whether or when they unfollowed you.</p></details>
+      <details name="questions" id="scan-risk" data-reveal><summary>What should I know before scanning?</summary><p>Scanning requests your own follower and following lists from Instagram. Automated activity may lead to limits or account blocks. Use it rarely. Requests run one at a time with pauses; Cancel is available, and the scan stops on the first limit or error without retrying. Incomplete lists can affect results.</p></details>
+      <details name="questions" data-reveal><summary>Why is installation manual?</summary><p>The extension is currently distributed on GitHub. Download the ZIP and use Developer mode to load it. A normal website cannot silently install a browser extension.</p></details>
       <details name="questions" data-reveal><summary>How do I update it?</summary><p>Download the latest ZIP and replace the files in your installation folder with its contents. Click Reload on the extension card, then refresh Instagram. Manual installations don’t update themselves.</p></details>
       <details name="questions" data-reveal><summary>How do I remove it?</summary><p>Open your browser’s extensions page and click Remove on IG Tools. You can then delete the extracted folder.</p></details>
       <details name="questions" data-reveal><summary>Is this affiliated with Meta?</summary><p>No. IG Tools is not affiliated with, endorsed by or sponsored by Instagram or Meta. Respect copyright, privacy and the site’s terms when using it.</p></details>

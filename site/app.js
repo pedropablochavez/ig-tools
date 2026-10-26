@@ -42,10 +42,12 @@
 
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const previews = {
+    followers: { src: 'assets/nonfollowers-demo.png', alt: 'Actual IG Tools non-followers panel with fictional accounts, Keep controls, a verified filter and CSV export.', text: 'Non-followers results preview.' },
     feed: { src: 'assets/feed-demo.png', alt: 'Bundled extension demo: photo-post music controls and a download button.', text: 'Photo-post music preview.' },
     profile: { src: 'assets/profile-demo.png', alt: 'Bundled extension demo: full-size profile viewer with Download, Open and Close controls.', text: 'Full-size profile viewer preview.' },
   };
   const previewImage = document.querySelector('.demo-stage > img');
+  let previewAnimation;
   let previewRevision = 0;
   const choosePreview = async (name, updateUrl = false) => {
     if (!Object.hasOwn(previews, name)) return;
@@ -64,11 +66,19 @@
     document.getElementById('demo-state').textContent = next.text;
     for (const control of document.querySelectorAll('[data-preview]')) control.setAttribute('aria-pressed', String(control === button));
     if (updateUrl) setUrlState('preview', name);
-    if (!reducedMotion.matches) previewImage.animate([{ opacity: .15 }, { opacity: 1 }], { duration: 650, easing: 'ease-out' });
+    previewAnimation?.cancel();
+    if (!reducedMotion.matches) previewAnimation = previewImage.animate([{ opacity: .15 }, { opacity: 1 }], { duration: 650, easing: 'ease-out' });
   };
   for (const button of document.querySelectorAll('[data-preview]')) button.addEventListener('click', () => choosePreview(button.dataset.preview, true));
   choosePreview(new URL(location.href).searchParams.get('preview'));
   document.querySelector('.demo-overlay').hidden = false;
+
+  // A link to the scan notice opens its native disclosure, including on direct loads.
+  const revealAnchor = () => {
+    if (location.hash === '#scan-risk') document.getElementById('scan-risk').open = true;
+  };
+  window.addEventListener('hashchange', revealAnchor);
+  revealAnchor();
 
   // Finite, once-only motion. Content is visible even without JavaScript or an observer.
   const enter = (element, index, picture = false) => {
@@ -78,7 +88,11 @@
       : [{ opacity: .2, transform: 'translateY(20px)' }, { opacity: 1, transform: 'translateY(0)' }],
     { duration: picture ? 1000 : 850, delay: (index % 3) * 70, easing: 'cubic-bezier(.22,1,.36,1)' });
   };
-  document.querySelectorAll('[data-enter]').forEach((element, index) => enter(element, index, element.tagName === 'FIGURE'));
+  document.querySelectorAll('[data-enter]').forEach((element, index) => {
+    if (element.matches('h1')) {
+      element.querySelectorAll('span').forEach((line, index) => enter(line, index));
+    } else enter(element, index, element.tagName === 'FIGURE');
+  });
   if ('IntersectionObserver' in window) {
     let remaining = document.querySelectorAll('[data-reveal]').length;
     const observer = new IntersectionObserver((entries) => {
