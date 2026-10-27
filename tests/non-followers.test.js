@@ -17,12 +17,12 @@ const user = (pk, username = `user${pk}`) => ({ pk: String(pk), pk_id: String(pk
 
 // Pages shaped like the ones observed on 2026-10-22: 12 users, an opaque cursor for followers and
 // a numeric offset for following.
-function pages(users, kind) {
+function pages(users, kind, size = 12) {
   const out = [];
-  for (let i = 0; i < users.length; i += 12) {
-    const more = i + 12 < users.length;
-    out.push({ users: users.slice(i, i + 12), big_list: true, page_size: 12, has_more: more,
-      next_max_id: more ? (kind === 'followers' ? `QVFE${'x'.repeat(100)}${i}+/=` : String(i + 12)) : null,
+  for (let i = 0; i < users.length; i += size) {
+    const more = i + size < users.length;
+    out.push({ users: users.slice(i, i + size), big_list: true, page_size: size, has_more: more,
+      next_max_id: more ? (kind === 'followers' ? `QVFE${'x'.repeat(100)}${i}+/=` : String(i + size)) : null,
       should_limit_list_of_followers: false, should_limit_list_of_followings: false, status: 'ok' });
   }
   return out;
@@ -36,10 +36,10 @@ following[0] = user(21, 'renamed.21');
 following[19] = user(40, 'user5');
 
 function interceptor({ path: pathname = '/me.user/', activation = true, counts = { follower_count: 30, following_count: 26 },
-  respond: custom } = {}) {
+  respond: custom, listUsers = { followers, following }, pageSize = 12, random = 0.5, holdBreak = false } = {}) {
   const messages = [], listeners = [], delays = [], requests = [];
   let inFlight = 0, maxInFlight = 0;
-  const lists = { followers: pages(followers, 'followers'), following: pages(following, 'following') };
+  const lists = { followers: pages(listUsers.followers, 'followers', pageSize), following: pages(listUsers.following, 'following', pageSize) };
   const defaultRespond = (kind, index) => new Response(JSON.stringify(lists[kind][index]), { status: 200 });
   class XHR {
     constructor() { this.loads = []; this.responseType = ''; this.responseText = '{}'; }
@@ -68,7 +68,8 @@ function interceptor({ path: pathname = '/me.user/', activation = true, counts =
   const context = vm.createContext({ window, XMLHttpRequest: XHR, URL, Request, Response, Headers,
     URLSearchParams, TextDecoder, AbortController, DOMException, clearTimeout,
     // Pauses between pages run immediately; their requested length is recorded.
-    setTimeout: (fn, ms) => { delays.push(ms); return setTimeout(fn, ms >= 5000 ? 2 ** 31 - 1 : 0); },
+    setTimeout: (fn, ms) => { delays.push(ms); return setTimeout(fn, ms === 8000 || (holdBreak && ms > 5000) ? 2 ** 31 - 1 : 0); },
+    Math: Object.assign(Object.create(Math), { random: () => random }),
     navigator: { userActivation: { isActive: activation } },
     document: { readyState: 'loading', cookie: `csrftoken=tok; ds_user_id=${ME}`, addEventListener() {}, querySelectorAll: () => [] },
     sessionStorage: { getItem: () => null }, console: { log() {}, table() {} },
@@ -97,7 +98,7 @@ function interceptor({ path: pathname = '/me.user/', activation = true, counts =
     maxInFlight: () => maxInFlight, start: (id = 'scan-1') => post({ source: 'ighd-nf-start', id }) };
 }
 
-test('reads both lists with the website request, one page at a time, and compares by pk', async () => {
+test('requests 50 accounts, follows smaller server pages one at a time, and compares by pk', async () => {
   const h = interceptor();
   assert.deepEqual(plain(h.messages.find((m) => m.source === 'ighd-viewer')),
     { source: 'ighd-viewer', username: 'me.user', followers: 30, following: 26 });
@@ -108,18 +109,18 @@ test('reads both lists with the website request, one page at a time, and compare
     ['followers:0', 'followers:1', 'followers:2', 'following:0', 'following:1', 'following:2']);
   assert.equal(h.maxInFlight(), 1, 'never two requests at the same time');
   const urls = h.requests.map((r) => r.url);
-  assert.equal(urls[0], `https://www.instagram.com/api/v1/friendships/${ME}/followers/?count=12&search_surface=follow_list_page`);
+  assert.equal(urls[0], `https://www.instagram.com/api/v1/friendships/${ME}/followers/?count=50&search_surface=follow_list_page`);
   const cursor = pages(followers, 'followers')[0].next_max_id;
-  assert.equal(urls[1], `https://www.instagram.com/api/v1/friendships/${ME}/followers/?count=12&max_id=${encodeURIComponent(cursor)}&search_surface=follow_list_page`);
-  assert.equal(urls[3], `https://www.instagram.com/api/v1/friendships/${ME}/following/?count=12`);
-  assert.equal(urls[4], `https://www.instagram.com/api/v1/friendships/${ME}/following/?count=12&max_id=12`);
+  assert.equal(urls[1], `https://www.instagram.com/api/v1/friendships/${ME}/followers/?count=50&max_id=${encodeURIComponent(cursor)}&search_surface=follow_list_page`);
+  assert.equal(urls[3], `https://www.instagram.com/api/v1/friendships/${ME}/following/?count=50`);
+  assert.equal(urls[4], `https://www.instagram.com/api/v1/friendships/${ME}/following/?count=50&max_id=12`);
   const init = h.requests[0].init;
   assert.equal(init.credentials, 'include');
   assert.equal(init.headers['x-ig-app-id'], '936619743392459');
   assert.equal(init.headers['x-csrftoken'], 'tok');
   const pauses = h.delays.filter((ms) => ms < 5000);
   assert.equal(pauses.length, 5, 'a pause before every page after the first');
-  assert.ok(pauses.every((ms) => ms >= 2000 && ms <= 4000), `pauses ${pauses}`);
+  assert.ok(pauses.every((ms) => ms >= 1300 && ms <= 2300), `pauses ${pauses}`);
   assert.deepEqual(done.users.map((u) => u.pk), Array.from({ length: 16 }, (_, i) => String(i + 31)));
   assert.equal(done.users.find((u) => u.pk === '40').username, 'user5');
   assert.equal(done.followers, 30);
@@ -127,6 +128,42 @@ test('reads both lists with the website request, one page at a time, and compare
   const progress = h.scanMessages().filter((m) => m.state === 'running');
   assert.deepEqual(progress.at(-1), { source: 'ighd-nf', id: 'scan-1', state: 'running', list: 'following',
     followers: 30, following: 26, pages: 6, totals: { followers: 30, following: 26 } });
+});
+
+test('879 followers and 1,074 following take 40 requests with reference pacing and breaks', async () => {
+  const listUsers = { followers: Array.from({ length: 879 }, (_, i) => user(i + 1)),
+    following: Array.from({ length: 1074 }, (_, i) => user(i + 1)) };
+  for (const random of [0, 0.5, 0.999999]) {
+    const h = interceptor({ listUsers, pageSize: 50, random, counts: { follower_count: 879, following_count: 1074 } });
+    h.start();
+    const end = await h.settle();
+    assert.equal(end.state, 'done');
+    assert.equal(end.pages, 40);
+    assert.equal(h.requests.filter((r) => r.kind === 'followers').length, 18);
+    assert.equal(h.requests.filter((r) => r.kind === 'following').length, 22);
+    assert.equal(h.maxInFlight(), 1);
+    assert.deepEqual(end.users.map((u) => u.pk), Array.from({ length: 195 }, (_, i) => String(i + 880)));
+    const pauses = h.delays.filter((ms) => ms !== 8000);
+    assert.equal(pauses.length, 39, 'no wait before the first request or after the last');
+    pauses.forEach((ms, i) => {
+      const rest = (i + 1) % 15 === 0;
+      assert.ok(ms >= (rest ? 6300 : 1300) && ms <= (rest ? 17300 : 2300), `pause ${i + 1}: ${ms}`);
+    });
+    assert.ok(pauses.reduce((sum, ms) => sum + ms, 0) <= 119700, 'at most 119.7 seconds of waits for 40 pages');
+  }
+});
+
+test('Cancel wakes a long break without fetching the next page', async () => {
+  let cursor = 0;
+  const h = interceptor({ holdBreak: true, counts: {}, respond: () => new Response(JSON.stringify({
+    users: [user(cursor + 1000)], has_more: true, next_max_id: String(++cursor), status: 'ok'
+  })) });
+  h.start();
+  while (!h.delays.some((ms) => ms > 8000) && !['stopped', 'done'].includes(h.last()?.state)) await tick();
+  h.post({ source: 'ighd-nf-cancel', id: 'scan-1' });
+  const end = await h.settle();
+  assert.equal(end.state, 'cancelled');
+  assert.equal(h.requests.length, 15);
 });
 
 test('Cancel stops the scan without further requests or a cooldown', async () => {
@@ -196,6 +233,26 @@ test('blocks, server errors and network failures stop the scan', async () => {
   }
 });
 
+test('limited or broken pagination stops without publishing a completed comparison', async () => {
+  const cases = [
+    [{ should_limit_list_of_followers: true }, 'limited'],
+    [{ should_limit_list_of_followings: true }, 'limited'],
+    [{ has_more: true, next_max_id: null }, 'error'],
+    [{ has_more: true, next_max_id: 'next', users: [] }, 'error'],
+    [{ has_more: true, next_max_id: 'repeated' }, 'error']
+  ];
+  for (const [fields, reason] of cases) {
+    const h = interceptor({ respond: (kind, index, init, def) => kind === 'followers' ? def(kind, index)
+      : new Response(JSON.stringify({ users: [user(31)], status: 'ok', has_more: false, ...fields })) });
+    h.start();
+    const end = await h.settle();
+    assert.equal(end.state, 'stopped');
+    assert.equal(end.reason, reason);
+    assert.equal(end.users, undefined);
+    assert.ok(h.requests.length <= 5, 'no loop or automatic retry');
+  }
+});
+
 test('only your own profile, only after a click, and never on its own', async () => {
   const idle = interceptor();
   for (let i = 0; i < 20; i++) await tick();
@@ -215,7 +272,7 @@ test('only your own profile, only after a click, and never on its own', async ()
   noClick.start();
   assert.deepEqual([noClick.last().state, noClick.last().reason], ['refused', 'no-click']);
 
-  const tooLarge = interceptor({ counts: { follower_count: 2000, following_count: 1700 } });
+  const tooLarge = interceptor({ counts: { follower_count: 10000, following_count: 5401 } });
   tooLarge.start();
   assert.deepEqual(plain(tooLarge.last()), { source: 'ighd-nf', id: 'scan-1', state: 'refused', reason: 'too-large',
     pages: 309, limit: 300 });
@@ -250,7 +307,7 @@ class El {
   set textContent(v) { this.text = String(v); this.kids = []; }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   addEventListener(type, fn) { (this.handlers[type] ||= []).push(fn); }
-  click(isTrusted = true) { (this.handlers.click || []).forEach((fn) => fn({ isTrusted })); }
+  click(isTrusted = true) { if (!this.disabled) (this.handlers.click || []).forEach((fn) => fn({ isTrusted })); }
   change() { (this.handlers.change || []).forEach((fn) => fn({ isTrusted: true })); }
   append(...nodes) { for (const n of nodes) { if (typeof n === 'string') continue; n.remove(); n.parentElement = this; this.kids.push(n); } }
   appendChild(n) { this.append(n); return n; }
@@ -288,7 +345,7 @@ function panel({ path: pathname = '/me.user/', stored = {} } = {}) {
   });
   vm.runInContext(`${between(content, '  // First URL segments', '  // Messages come from intercept.js')}
     ${between(content, '  // ---------- Non-followers scan', '  // The site is a single-page app')}
-    globalThis.api = { updateNfButton, nfBtn, nfPanel, nfCsv, nf };`, context);
+    globalThis.api = { updateNfButton, nfBtn, nfPanel, nfBody, nfCsv, nf };`, context);
   const receive = (data) => listeners.forEach((fn) => fn({ data }));
   return { context, body, posted, downloads, receive, store, api: context.api };
 }
@@ -301,15 +358,17 @@ test('the button only appears on your own profile and Start needs a real click',
   assert.equal(p.api.nfBtn.isConnected, true);
   p.api.nfBtn.click();
   assert.equal(p.api.nfPanel.isConnected, true);
-  assert.match(p.api.nfPanel.textContent, /about 164 requests and 9 min/);
+  assert.match(p.api.nfPanel.textContent, /about 40 requests and 2 min/);
+  assert.match(p.api.nfPanel.textContent, /50 accounts per request/);
   assert.match(p.api.nfPanel.textContent, /may limit or block accounts/);
   assert.equal(p.posted.length, 1, 'opening the panel sends nothing');
   p.api.nfPanel.button('Start scan').click(false);
   assert.equal(p.posted.length, 1, 'a synthetic click does not start');
   p.api.nfPanel.button('Start scan').click(true);
   assert.deepEqual(plain(p.posted.at(-1)), { source: 'ighd-nf-start', id: 'id-1' });
-  p.receive({ source: 'ighd-nf', id: 'id-1', state: 'running', list: 'following', followers: 879, following: 340 });
+  p.receive({ source: 'ighd-nf', id: 'id-1', state: 'running', list: 'following', followers: 879, following: 340, pages: 25 });
   assert.match(p.api.nfPanel.textContent, /Followers 879 \/ 879Following 340 \/ 1,074/);
+  assert.match(p.api.nfPanel.textContent, /Comparing following against your followers · 25 requests completed/);
   p.api.nfPanel.button('Cancel').click();
   assert.deepEqual(plain(p.posted.at(-1)), { source: 'ighd-nf-cancel', id: 'id-1' });
   p.receive({ source: 'ighd-nf', id: 'id-1', state: 'done', users: [] });
@@ -398,11 +457,11 @@ async function scanned(options) {
   return p;
 }
 
-test('Keep adds an account to the saved whitelist, which hides it from results until removed', async () => {
+test('Add to whitelist adds an account to the saved whitelist, which hides it from results until removed', async () => {
   const p = await scanned();
   assert.deepEqual(usernames(p), ['/friend.31/', '/user33/'], 'verified accounts are left out by default');
   const row = p.api.nfPanel.find((e) => e.tagName === 'LI' && e.textContent.includes('@friend.31'));
-  row.button('Keep').click();
+  row.button('Add to whitelist').click();
   assert.deepEqual(usernames(p), ['/user33/']);
   assert.match(p.api.nfPanel.textContent, /1 account you follow doesn't follow you back\.Not shown: 1 whitelisted, 1 verified\./);
   assert.deepEqual(p.store.nfWhitelist, { 31: 'friend.31' });
@@ -413,6 +472,74 @@ test('Keep adds an account to the saved whitelist, which hides it from results u
   assert.match(p.api.nfPanel.textContent, /No accounts yet/);
   p.api.nfPanel.button('Back').click();
   assert.deepEqual(usernames(p), ['/friend.31/', '/user33/']);
+});
+
+test('Add to whitelist and the asynchronous storage refresh retain the scroll container and its position', async () => {
+  const p = await scanned();
+  const body = p.api.nfBody;
+  body.scrollTop = 650;
+  p.api.nfPanel.find((e) => e.tagName === 'LI' && e.textContent.includes('@friend.31')).button('Add to whitelist').click();
+  assert.equal(p.api.nfBody, body);
+  assert.equal(body.scrollTop, 650);
+  await tick(); await tick();
+  assert.equal(body.scrollTop, 650, 'storage.onChanged must not reset the scroll after Add to whitelist');
+});
+
+test('selection adds only selected visible accounts to the whitelist in one update', async () => {
+  const p = await scanned();
+  assert.equal(p.api.nfPanel.find((e) => e.attrs.class === 'ighd-nf-bulk').button('Add to whitelist').disabled, true);
+  const select = p.api.nfPanel.find((e) => e.attrs['data-nf-focus'] === '31');
+  p.api.nfBody.scrollTop = 400;
+  select.checked = true; select.change();
+  assert.equal(p.api.nfBody.scrollTop, 400);
+  assert.match(p.api.nfPanel.textContent, /1 selected/);
+  p.api.nfPanel.find((e) => e.attrs.class === 'ighd-nf-bulk').button('Add to whitelist').click();
+  assert.deepEqual(p.store.nfWhitelist, { 31: 'friend.31' });
+  assert.equal(p.api.nf.selected.size, 0);
+  assert.deepEqual(usernames(p), ['/user33/']);
+
+  const all = p.api.nfPanel.find((e) => e.attrs['data-nf-focus'] === 'all');
+  all.checked = true; all.change();
+  p.api.nfPanel.find((e) => e.attrs.class === 'ighd-nf-bulk').button('Add to whitelist').click();
+  assert.deepEqual(p.store.nfWhitelist, { 31: 'friend.31', 33: 'user33' }, 'hidden verified accounts are not selected');
+});
+
+test('Unfollow reviews exact targets, needs trusted confirmation, and keeps unconfirmed accounts', async () => {
+  const p = await scanned();
+  const select = p.api.nfPanel.find((e) => e.attrs['data-nf-focus'] === '31');
+  select.checked = true; select.change();
+  p.api.nfPanel.button('Unfollow selected').click();
+  assert.match(p.api.nfPanel.textContent, /Unfollow this account\?.*@friend.31/);
+  assert.equal(p.posted.at(-1).source, 'ighd-nf-start', 'reviewing sends no mutation request');
+  p.api.nfPanel.button('Confirm unfollow (1)').click(false);
+  assert.equal(p.posted.at(-1).source, 'ighd-nf-start');
+  p.api.nfPanel.button('Confirm unfollow (1)').click(true);
+  assert.deepEqual(plain(p.posted.at(-1)), { source: 'ighd-nf-unfollow-start', id: 'id-2', pks: ['31'] });
+  p.receive({ source: 'ighd-nf-unfollow', id: 'id-2', state: 'running', completed: 1, removedPk: '31' });
+  p.receive({ source: 'ighd-nf-unfollow', id: 'id-2', state: 'done', completed: 1 });
+  assert.deepEqual(usernames(p), ['/user33/']);
+  assert.match(p.api.nfPanel.textContent, /1 of 1 accounts confirmed unfollowed\. Finished\./);
+  p.receive({ source: 'ighd-nf-unfollow', id: 'id-2', state: 'running', removedPk: '33' });
+  assert.deepEqual(usernames(p), ['/user33/'], 'late messages cannot remove another account');
+});
+
+test('hiding verified accounts removes their selection; changes during review invalidate confirmation', async () => {
+  const p = await scanned({ stored: { nfShowVerified: true } });
+  const all = p.api.nfPanel.find((e) => e.attrs['data-nf-focus'] === 'all');
+  all.checked = true; all.change();
+  const verified = p.api.nfPanel.find((e) => e.attrs['data-nf-focus'] === 'verified');
+  verified.checked = false; verified.change();
+  assert.equal(p.api.nf.selected.has('32'), false);
+  assert.equal(p.api.nf.selected.size, 2);
+  p.api.nfPanel.button('Unfollow selected').click();
+  p.store.nfWhitelist = { 31: 'friend.31' };
+  p.store.nfShowVerified = false;
+  // Simulate preferences loaded by the storage listener before confirmation.
+  p.context.chrome.storage.local.set({ nfWhitelist: p.store.nfWhitelist });
+  await tick(); await tick();
+  p.api.nfPanel.button('Confirm unfollow (2)').click();
+  assert.equal(p.api.nf.unfollow, null);
+  assert.equal(p.posted.at(-1).source, 'ighd-nf-start');
 });
 
 test('a saved whitelist applies by pk on the next page load, and bad entries are ignored', async () => {
@@ -443,7 +570,7 @@ test('Show verified accounts sits next to Start scan before a scan, filters resu
   box.change();
   assert.equal(p.store.nfShowVerified, true);
   p.api.nfPanel.button('Whitelist (0)').click();
-  assert.match(p.api.nfPanel.textContent, /No accounts yet\. After a scan, press Keep/);
+  assert.match(p.api.nfPanel.textContent, /No accounts yet\. After a scan, press Add to whitelist/);
   p.api.nfPanel.button('Back').click();
   p.api.nfPanel.button('Start scan').click();
   p.receive(result(p.posted.at(-1).id));
@@ -456,7 +583,7 @@ test('Show verified accounts sits next to Start scan before a scan, filters resu
   assert.deepEqual(usernames(p), ['/friend.31/', '/user33/']);
   assert.match(p.api.nfPanel.textContent, /Not shown: 1 verified\./);
   assert.equal(p.store.nfShowVerified, false);
-  p.api.nfPanel.find((e) => e.tagName === 'LI' && e.textContent.includes('@user33')).button('Keep').click();
+  p.api.nfPanel.find((e) => e.tagName === 'LI' && e.textContent.includes('@user33')).button('Add to whitelist').click();
   assert.match(p.api.nfPanel.textContent, /Not shown: 1 whitelisted, 1 verified\./);
   p.api.nfPanel.button('Export CSV').click();
   await tick();

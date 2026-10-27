@@ -29,15 +29,25 @@ A small, unofficial browser extension for Chromium-based browsers (Brave, Chrome
 - **Scan non-followers** on your own profile only: lists the accounts you follow that do not follow you
   back, with avatar, username and a link to the profile, and can export them as a CSV file. **This is
   the only feature that makes many requests of its own**, and only after you press **Start scan**: it
-  reads your Followers and Following lists with the same request the website makes when you scroll
-  those dialogs (12 accounts per request), one request at a time, 2–4 seconds apart, up to 300 requests.
-  An account with 879 followers and 1,074 following needs 164 requests, about 9 minutes. **Cancel**
+  reads your Followers and Following list endpoints, requesting **50 accounts per page**, one request
+  at a time, 1.3–2.3 seconds apart, plus a 5–15 second break every 15 requests, up to 300 requests.
+  This uses larger pages than the website's observed 12-account pages. With 50-account responses,
+  879 followers and 1,074 following need 40 requests, roughly 2 minutes instead of the previous
+  164 requests / 9 minutes. Instagram may return smaller pages or respond more slowly. **Cancel**
   stops it at once; it keeps running if you browse elsewhere in the same tab (reloading or closing
   the tab ends it). Any HTTP 429, block / verification notice or error stops the scan completely and
   shows when to try again; there is no automatic retry. Comparison is by account id, not username.
-  Instagram may limit or block accounts for automated activity, so use it rarely. It only reports:
-  there is no unfollow button or bulk action. Results stay in the tab's memory.
-  **Keep** adds an account to your **whitelist** (accounts you follow on purpose, such as brands or
+  Instagram may limit or block accounts for automated activity, so use it rarely. Results stay in the tab's memory.
+  Select individual accounts or **Select all shown**, then **Add to whitelist** to keep them together.
+  Adding accounts to the whitelist and selection preserve your position in the list, including after preferences are saved.
+  **Unfollow selected** first shows the exact accounts and asks you to confirm. Only that confirmation
+  sends Instagram's `usePolarisUnfollowMutation` for those accounts from the completed scan. Requests
+  run one at a time, 4–4.8 seconds apart, with an extra 5-minute break every 5 accounts (separate from
+  scan pacing). **Cancel remaining** stops the rest; a request already sent may still complete.
+  Only explicit relationship confirmations remove an account from the results. Limits, blocks,
+  errors or uncertain responses stop the batch without retrying. Check an uncertain outcome on
+  Instagram before trying again. Following a private account again may require its owner's approval.
+  **Add to whitelist** beside an account adds it to your **whitelist** (accounts you follow on purpose, such as brands or
   public figures): whitelisted accounts are never listed again, by account id, even after a rename.
   Verified accounts are left out unless you turn on **Show verified accounts**, next to Start scan (also
   available on the results). The **Whitelist** button is always in the panel. The list and the CSV
@@ -106,7 +116,9 @@ without affecting the website's original response.
   No extra request is made; only that request's theme flag changes.
   When you start a non-followers scan on your own profile, it requests the pages of your own
   Followers / Following lists (`/api/v1/friendships/<your id>/followers/` and `/following/`), one at a
-  time, and shares the post-detail lookups' queue and 429 cooldown.
+  time, and shares the post-detail lookups' queue and 429 cooldown. Confirmed selected unfollows
+  use the website's GraphQL mutation in the same queue; they do not start merely from scanning,
+  selecting accounts, opening the confirmation view or adding accounts to the whitelist.
 - `content.js` shows the buttons, audio credits, the follows-you label, chat themes, the
   non-followers panel and the viewer, using the data for the profile or post you are looking at.
 - `music-player.js` first uses page audio, then switches to an extension-owned player if the page

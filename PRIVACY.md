@@ -15,16 +15,26 @@
   you, using the relationship the profile page already loaded. It makes no extra request, and this
   status is kept only in memory in the current tab (up to 500 recent profiles).
 - **Non-followers scan.** Only on your own profile and only after you press **Start scan**, the
-  extension requests the pages of your own Followers and Following lists from Instagram, with the same
-  request the website makes when you scroll those lists (one request at a time, 2–4 seconds apart, at
-  most 300 requests). These requests use your existing session and go only to instagram.com. It
+  extension requests the pages of your own Followers and Following lists from Instagram using those
+  list endpoints, requesting 50 accounts per page (larger than the website's observed 12-account pages).
+  It makes one request at a time, 1.3–2.3 seconds apart, with an extra 5–15 second break every 15
+  requests, at most 300 requests. These requests use your existing session and go only to instagram.com. It
   compares the two lists in the current tab and shows the accounts that do not follow you back. The
   lists and results are kept only in memory in that tab and are discarded on reload or close; they
   are not stored or sent to the extension author or third parties. **Export CSV** saves a file to your
   computer through your browser's download feature. If Instagram answers with a rate limit, a block or
   an error, the scan stops and the extension pauses its own requests for 1–15 minutes. Instagram may
   restrict accounts for automated activity; this risk is yours and the feature is optional.
-- **Non-followers whitelist.** Accounts you mark with **Keep** (their account id and username) and
+- **Selected unfollows.** After a completed scan, you can select accounts and review them with
+  **Unfollow selected**. Only pressing **Confirm unfollow** sends Instagram's own unfollow mutation
+  for those selected account ids, using your existing session. This changes who you follow. Session
+  tokens are read locally from the loaded page / its requests, used only with instagram.com, and
+  never saved to persistent storage or logged by this feature. One request runs at a time, 4–4.8 seconds apart, with an
+  extra 5-minute break every 5 accounts. Cancel stops remaining requests; a request already sent
+  may still complete. Rate limits, blocks, errors and unconfirmed outcomes stop the batch with no
+  automatic retry. Operation progress and confirmations stay in tab memory only. Following a private
+  account again may require its owner's approval; Instagram may restrict automated actions.
+- **Non-followers whitelist.** Accounts you mark with **Add to whitelist**, individually or together (their account id and username), and
   your "Show verified accounts" choice are saved in the extension's own local storage on your
   computer, so they apply to later scans. Instagram's pages cannot read this storage, and it is never
   sent anywhere. You can remove entries in the panel's Whitelist view; uninstalling the extension
@@ -54,7 +64,7 @@
 
 | Permission | Why |
 | --- | --- |
-| `https://www.instagram.com/*` | To show the buttons and viewer on profiles, posts and stories, and to read your own follower lists when you start a non-followers scan. |
+| `https://www.instagram.com/*` | To show the buttons and viewer on profiles, posts and stories, read your own lists when you start a scan, and unfollow selected scan results only after confirmation. |
 | `downloads` | To save a file (media, or the non-followers CSV) to your computer when you click a download / export button. |
 | `offscreen` | To play the selected post's music in a bundled extension document when page autoplay requires a click. |
 | `storage` | To remember the non-followers whitelist and the "Show verified accounts" choice on your computer. |

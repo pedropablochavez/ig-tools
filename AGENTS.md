@@ -12,7 +12,8 @@ docs are in English. Load it via `brave://extensions` → Developer mode → Loa
 - **Passive first:** prefer reading data the page already loaded (`intercept.js`). The only requests
   the extension makes itself: the file the user downloads, and `/api/v1/media/<id>/info/` (the same
   request the site makes when a post is opened) for one post at a time, plus the owner-approved
-  non-followers scan of the viewer's own lists (v2.6.0, button-started only; see below). The one
+  non-followers scan of the viewer's own lists (v2.6.0, button-started only) and selected unfollows
+  from its completed results (v2.6.4, separately reviewed and confirmed; see below). The one
   modified site request: the conversation query's chat theme flag (owner-approved exception, v2.5.0).
 - Commits end with the `Co-Authored-By` trailer used in history. Commit email is the GitHub noreply
   address already set in this repo's git config (do not expose the owner's personal email).
@@ -47,8 +48,10 @@ Messages between worlds are checked with `fromPage(e)` (same window + same origi
 Owner asked for a "Scan non-followers" button on their own profile, approved after a written risk
 review (NON_FOLLOWERS_FEASIBILITY.md) the active approach "b1": exactly the website's own list request,
 page size 12, 2–4 s random pauses, page cap, Cancel, full stop on 429 / block / error. They pointed at
-davidarroyo1234/InstagramUnfollowers as a reference: same endpoints, but do NOT copy its `count=50`,
-automatic retries after 429, unfollow feature, localStorage results or scanning other accounts.
+davidarroyo1234/InstagramUnfollowers as a reference. The original page-size / pacing restrictions
+were superseded by the owner's speed request in v2.6.3 (below). Do NOT copy automatic retries after
+429, localStorage results or scanning other accounts. The owner explicitly requested selected
+unfollows in v2.6.4 (below), superseding the original report-only scope.
 
 Observed in the owner's Brave on 2026-10-22 (read-only probe, no own requests): the dialogs call
 `GET /api/v1/friendships/<pk>/followers/?count=12[&max_id=…]&search_surface=follow_list_page` and
@@ -100,6 +103,75 @@ now ends at the new section). In the owner's Brave: loading the profile and open
 made zero list requests; the owner ran a real scan and reported it works ("Funciona bien"), then checked
 the off-profile behaviour, button placement and the panel with Whitelist / Show verified ("Todo bien").
 Keep on real results was not observed in the browser (covered by tests only).
+
+## Faster non-followers scan (v2.6.3, 2026-10-26)
+
+The owner requested a redesign matching InstagramUnfollowers' speed. The scan now requests
+`count=50`, with 1.3–2.3 s between pages and an additional 5–15 s break after every 15 requests
+if more pages remain (the reference's default rhythm). This supersedes v2.6.0's `count=12` /
+2–4 s rule. It uses the same own-account endpoints and copied site headers, but larger pages
+than the site was observed requesting. Follow the server's actual cursor even for shorter pages.
+879 followers + 1,074 following take 40 requests if the server returns 50-account pages; about
+2 minutes including average waits / estimated network time, not a browser measurement or guarantee.
+The panel reflects this estimate and shows the current stage and completed request count.
+
+Keep trusted Start on the own profile, one shared serial queue, the 300-page cap, interruptible
+Cancel (including the long break), shared cooldown and no retries on errors / blocks. Results
+remain memory-only; whitelist / verified filtering and CSV are unchanged. A cancelled scan checks
+again when its queued request actually starts. Either list restriction flag, explicit incomplete
+pagination or a repeated cursor stops the scan rather than claiming a full comparison.
+
+Validation: 121 regression tests pass (15 non-followers tests), all runtime JS syntax checks pass,
+and the v2.6.3 distribution ZIP builds successfully. Fixtures cover full 50-account pages (40
+requests for the recorded account sizes), shorter 12-account server pages, timing bounds / long
+breaks, cancellation during a break, restriction flags and broken cursors. The new speed has not
+yet been measured in the owner's logged-in Brave; do not claim equivalent real-world speed from
+these fixtures alone.
+
+## Selection, scroll preservation and selected unfollows (v2.6.4, 2026-10-26)
+
+The owner confirmed v2.6.3 takes the same time as the reference in their real Brave session.
+They then reported Keep resetting the result list to the top and requested selection, batch
+Add to whitelist, and clarified that the other action means **dejar de seguir a las seleccionadas**.
+This explicitly authorizes selected unfollows, superseding the original report-only restriction.
+
+`content.js` retains one `nfBody` scroll container and restores scrollTop after renders (including
+asynchronous storage changes). Checkboxes, Select all shown, and Add to whitelist work by pk;
+hidden verified / whitelisted accounts are excluded and selection is tab-only. A batch that cannot
+fit in the 5,000-entry whitelist is refused without partial changes. Unfollow selected opens a
+review listing the exact targets; only the trusted Confirm unfollow click starts mutations.
+
+`intercept.js` retains the latest completed own-account scan's non-followers by pk; the start
+message cannot supply arbitrary targets, duplicates or a different viewer. It uses the site's
+`usePolarisUnfollowMutation`, loaded / passively observed operation id when available, otherwise
+the reference tool's operation `27789106940691111` (2026-10-26). Session tokens come from loaded
+modules, same-origin GraphQL request bodies or bounded embedded JSON; no token-fetch requests,
+logging or persistent token storage. All requests share `serial` and `retryAfterUntil`.
+
+Unfollow pacing matches the reference defaults: 4–4.8 s between accounts, plus 5 min after every
+5 accounts if more remain. Cancel interrupts waits / queued writes; a mutation already sent is
+allowed to finish so its actual confirmation can be reported, then remaining targets stop.
+Reload / close also stops remaining work; an already sent mutation may complete. No retries on
+429 / block / error / uncertain response. A 200 alone is insufficient: an explicit returned
+friendship_status.following=false is required (and no following=true / outgoing request). Unlike
+the reference, there is no follow-up search request if the mutation omits relationship status:
+the batch stops as unconfirmed and tells the owner which account to inspect. Only confirmed
+targets disappear from results; successful ids cannot be submitted again from the same scan.
+
+Validation: 131 Node tests pass, including six mutation tests and four new UI logic tests.
+Headless Brave fixtures at 1440 and 390 px verified real scroll preservation after Keep and
+asynchronous storage, selection, batch whitelist, review / trusted confirmation, confirmed
+removal and layout, with zero network requests. See `scripts/check_nonfollowers_ui.mjs`.
+No real account was unfollowed during development; live mutation compatibility remains unverified.
+The owner must reload the extension and Instagram; existing page-memory scan results are lost.
+
+## Clearer whitelist label (v2.6.5)
+
+The owner requested replacing the unintuitive per-account Keep label with Add to whitelist.
+The row action and its accessible name / empty-state help now use that wording; the existing
+selection-based Add to whitelist remains. Row button width is bounded for narrow panels. No
+request or storage behavior changed. Existing whitelist / scroll tests and headless Brave UI
+checks at 1440 and 390 px cover both the row action and the separate batch action.
 
 ## Chat themes (v2.5.0, safety pause and composer in v2.5.1)
 
@@ -410,4 +482,4 @@ and the audio engine / error. The owner requires playback without changing site 
 - `node --test tests/music-autoplay.test.js` runs the shipped music controller in a `vm` with stubbed
   media and DOM events, covering blocked playback, gesture recovery, focus changes and cancellation.
 - Real UI checks need the owner's logged-in browser.
-- Full suite: `node --test tests/music-autoplay.test.js tests/extension-audio.test.js tests/resource-usage.test.js tests/follow-badge.test.js tests/chat-theme.test.js tests/non-followers.test.js`.
+- Full suite: `node --test tests/*.test.js` (includes selected-unfollow request / cancellation tests).

@@ -2,7 +2,8 @@
 // It passively reads the responses the site already downloads on its own while you browse
 // and picks out media / audio data, whether each user follows you, and chat themes. Its own
 // requests are a queued post-detail lookup and, only when you start it on your own profile, the
-// pages of your own Followers / Following lists (non-followers scan). It also asks the site's own
+// pages of your own Followers / Following lists (non-followers scan), and confirmed, selected
+// unfollows from that scan. It also asks the site's own
 // conversation request to include the chat's theme, which the website leaves out for some accounts.
 // Temporary data goes only to content.js, in the same tab.
 (() => {
@@ -440,7 +441,7 @@
   function coolDown(ms) {
     retryAfterUntil = Math.max(retryAfterUntil, Date.now() + Math.min(900000, Math.max(60000, ms || 0)));
   }
-  const BLOCKED = /checkpoint|feedback_required|challenge|login_required|spam|rate limit|try again later|please wait/i;
+  const BLOCKED = /checkpoint|feedback_required|action_blocked|challenge|login_required|spam|rate limit|try again later|please wait/i;
   // A block, checkpoint, "try again later" or login page instead of data: the reason, or ''.
   function blockReason(res, text) {
     if (res.redirected || /^\s*</.test(text)) return `HTTP ${res.status} page instead of data`;
@@ -512,13 +513,15 @@
   }
 
   // ---------- Non-followers scan ----------
-  // Reads your own Followers and Following lists with the requests the website makes when you
-  // scroll those dialogs (12 accounts per page), one page at a time with 2–4 s between pages, and
-  // reports the accounts you follow that are not in your followers. Only on your own profile, only
+  // Reads your own Followers and Following list endpoints, requesting 50 accounts per page.
+  // Pacing matches InstagramUnfollowers' default: 1.3–2.3 s between pages, plus a 5–15 s
+  // break after every 15 requests. No parallel requests. This differs from the site's page size.
+  // Reports the accounts you follow that are not in your followers. Only on your own profile, only
   // after you press Start; any 429, block or error ends the scan, with no automatic retry.
-  const SCAN_PAGE_SIZE = 12;
+  const SCAN_PAGE_SIZE = 50;
   const SCAN_PAGE_LIMIT = 300;
-  let scan = null;
+  const SCAN_BREAK_EVERY = 15;
+  let scan = null, scanResult = null, unfollow = null;
 
   const routeUser = () => (location.pathname.split('/').filter(Boolean)[0] || '').toLowerCase();
   const scanSend = (s, msg) => send({ source: 'ighd-nf', id: s.id, ...msg });
@@ -552,6 +555,7 @@
   // One page. Returns { users, next } or throws an Error with `stop` (reason) and `cool` (ms).
   async function scanPage(s, kind, maxId) {
     const fail = (stop, cool, detail) => Object.assign(new Error(detail || stop), { stop, cool });
+    if (s.cancelled) throw fail('cancelled', 0);
     if (Date.now() < retryAfterUntil) throw fail('cooldown', 0);
     const url = scanPageUrl(kind, s.viewerPk, maxId);
     s.controller = new AbortController();
@@ -571,8 +575,10 @@
       if (BLOCKED.test(said) || (res.status >= 400 && BLOCKED.test(text || ''))) throw fail('blocked', 900000, `HTTP ${res.status} ${said.trim()}`);
       if (!res.ok) throw fail('error', 60000, `HTTP ${res.status}`);
       if (!data || data.status !== 'ok' || !Array.isArray(data.users)) throw fail('error', 60000, 'unexpected response');
-      if (data[`should_limit_list_of_${kind}`] === true) throw fail('limited', 0, `Instagram limits the ${kind} list`);
+      if (data.should_limit_list_of_followers === true || data.should_limit_list_of_followings === true
+        || data.should_limit_list_of_following === true) throw fail('limited', 0, `Instagram limits the ${kind} list`);
       const next = typeof data.next_max_id === 'string' || typeof data.next_max_id === 'number' ? String(data.next_max_id) : '';
+      if (data.has_more === true && (!next || !data.users.length)) throw fail('error', 60000, 'incomplete pagination');
       return { users: data.users.slice(0, 200).map(scanUser).filter(Boolean),
         next: data.has_more !== false && next && data.users.length ? next : null };
     } finally { clearTimeout(timer); s.controller = null; }
@@ -585,21 +591,29 @@
     try {
       for (const kind of ['followers', 'following']) {
         let maxId = null;
+        const cursors = new Set();
         progress(kind);
         do {
           if (s.cancelled) throw Object.assign(new Error('cancelled'), { stop: 'cancelled' });
           if (s.pages >= SCAN_PAGE_LIMIT) throw Object.assign(new Error('page limit'), { stop: 'limit' });
-          if (s.pages > 0) await scanPause(s, 2000 + Math.floor(Math.random() * 2001));
+          if (s.pages > 0) {
+            const pause = 1300 + Math.floor(Math.random() * 701) + Math.floor(Math.random() * 301);
+            const rest = s.pages % SCAN_BREAK_EVERY === 0 ? 5000 + Math.floor(Math.random() * 10001) : 0;
+            await scanPause(s, pause + rest);
+          }
           if (s.cancelled) throw Object.assign(new Error('cancelled'), { stop: 'cancelled' });
           const page = await serial(() => scanPage(s, kind, maxId));
           s.pages++;
           for (const u of page.users) lists[kind].set(u.pk, u);
           maxId = page.next;
+          if (maxId && cursors.has(maxId)) throw Object.assign(new Error('repeated pagination cursor'), { stop: 'error', cool: 60000 });
+          if (maxId) cursors.add(maxId);
           progress(kind);
         } while (maxId);
         slog(`non-followers: ${kind} ${lists[kind].size} in ${s.pages} pages`);
       }
       const nonFollowers = [...lists.following.values()].filter((u) => !lists.followers.has(u.pk));
+      scanResult = { viewerPk: s.viewerPk, users: new Map(nonFollowers.map((u) => [u.pk, u])) };
       slog(`non-followers: done, ${nonFollowers.length} of ${lists.following.size} don't follow back`);
       scanSend(s, { state: 'done', followers: lists.followers.size, following: lists.following.size,
         pages: s.pages, totals: s.totals, users: nonFollowers });
@@ -620,6 +634,7 @@
   function startScan(id) {
     if (scan) return;
     const refuse = (reason, extra) => send({ source: 'ighd-nf', id, state: 'refused', reason, ...extra });
+    if (unfollow) return refuse('busy');
     const viewerPk = cookie('ds_user_id');
     if (!/^\d{1,32}$/.test(viewerPk) || !viewer || viewer.username !== routeUser()) return refuse('not-own-profile');
     if (navigator.userActivation?.isActive !== true) return refuse('no-click');
@@ -627,6 +642,7 @@
     const totals = { followers: viewer.followers, following: viewer.following };
     const needed = Math.ceil((totals.followers || 0) / SCAN_PAGE_SIZE) + Math.ceil((totals.following || 0) / SCAN_PAGE_SIZE);
     if (needed > SCAN_PAGE_LIMIT) return refuse('too-large', { pages: needed, limit: SCAN_PAGE_LIMIT });
+    scanResult = null;
     scan = { id, viewerPk, totals, pages: 0, cancelled: false, controller: null, wake: null };
     slog(`non-followers: started (${totals.followers ?? '?'} followers, ${totals.following ?? '?'} following)`);
     runScan(scan);
@@ -637,6 +653,146 @@
     scan.cancelled = true;
     scan.controller?.abort();
     scan.wake?.();
+  }
+
+  // Selected unfollows. Same mutation as the website / reference tool; no writes until a
+  // trusted confirmation click. Targets must belong to this tab's last completed own scan.
+  const UNFOLLOW_NAME = 'usePolarisUnfollowMutation';
+  // Reference tool's current operation (2026-10-26). Prefer the site's loaded module / request.
+  let unfollowDocId = '27789106940691111';
+  let mutationTokens = null;
+  function noteMutationRequest(url, body) {
+    try {
+      const u = new URL(url, location.origin);
+      if (u.origin !== location.origin || !/^\/api\/graphql\/?$/.test(u.pathname)) return;
+      const p = typeof body === 'string' && body.length <= 65536 ? new URLSearchParams(body) : body;
+      if (!p || typeof p.get !== 'function') return;
+      const token = (key) => typeof p.get(key) === 'string' && p.get(key).length <= 4096 ? p.get(key) : '';
+      if (token('fb_dtsg') && token('lsd')) mutationTokens = { pk: cookie('ds_user_id'), fb: token('fb_dtsg'), lsd: token('lsd') };
+      if (p.get('fb_api_req_friendly_name') === UNFOLLOW_NAME && /^\d{5,32}$/.test(p.get('doc_id') || '')) unfollowDocId = p.get('doc_id');
+    } catch (_) {} // Observing a site request must never change it.
+  }
+
+  function unfollowConfig() {
+    let fb = '', lsd = '';
+    try {
+      fb = window.require?.('DTSGInitialData')?.token || '';
+      lsd = window.require?.('LSD')?.token || '';
+    } catch (_) {}
+    for (const name of ['usePolarisUnfollowMutation_instagramRelayOperation', 'usePolarisUnfollowMutation_facebookRelayOperation']) {
+      try {
+        const doc = window.require?.(name);
+        if (typeof doc === 'string' && /^\d{5,32}$/.test(doc)) unfollowDocId = doc;
+      } catch (_) {}
+    }
+    if ((!fb || !lsd) && mutationTokens?.pk === cookie('ds_user_id')) ({ fb, lsd } = mutationTokens);
+    if (!fb || !lsd) {
+      let remaining = MAX_RESPONSE_BYTES;
+      for (const el of document.querySelectorAll('script[type="application/json"]')) {
+        const text = el.textContent || '';
+        if (text.length > remaining) continue;
+        remaining -= text.length;
+        fb ||= /"DTSGInitialData",\[\],\{"token":"([^"\\]{1,4096})"/.exec(text)?.[1]
+          || /"dtsg":\{"token":"([^"\\]{1,4096})"/.exec(text)?.[1] || '';
+        lsd ||= /"LSD",\[\],\{"token":"([^"\\]{1,4096})"/.exec(text)?.[1] || '';
+        if (fb && lsd) break;
+      }
+    }
+    return typeof fb === 'string' && fb.length <= 4096 && typeof lsd === 'string' && lsd.length <= 4096 && fb && lsd
+      ? { fb, lsd, doc: unfollowDocId } : null;
+  }
+
+  async function unfollowOne(s, u) {
+    const fail = (stop, cool = 0) => Object.assign(new Error(stop), { stop, cool });
+    if (s.cancelled) throw fail('cancelled');
+    if (cookie('ds_user_id') !== s.viewerPk) throw fail('account-changed');
+    if (Date.now() < retryAfterUntil) throw fail('cooldown');
+    const config = unfollowConfig();
+    if (!config) throw fail('session-unavailable');
+    const params = new URLSearchParams({ av: s.viewerPk, __d: 'www', __user: '0', __a: '1', __comet_req: '7',
+      fb_dtsg: config.fb, lsd: config.lsd, jazoest: `2${[...config.fb].reduce((sum, c) => sum + c.charCodeAt(0), 0)}`,
+      fb_api_caller_class: 'RelayModern', fb_api_req_friendly_name: UNFOLLOW_NAME, doc_id: config.doc,
+      variables: JSON.stringify({ target_user_id: u.pk, container_module: 'profile',
+        nav_chain: 'PolarisProfilePostsTabRoot:profilePage:1:via_cold_start' }), server_timestamps: 'true' });
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      let res, text;
+      try {
+        res = await origFetch(`${location.origin}/api/graphql`, { method: 'POST', credentials: 'same-origin',
+          headers: { ...apiRequestHeaders(), 'content-type': 'application/x-www-form-urlencoded',
+            'x-fb-friendly-name': UNFOLLOW_NAME, 'x-fb-lsd': config.lsd }, body: params.toString(), signal: controller.signal });
+        noteRateLimit(res);
+        if (res.status === 429) throw fail('rate-limit');
+        text = await readResponseText(res);
+      } catch (e) { throw e.stop ? e : fail('network', 60000); }
+      if (cookie('ds_user_id') !== s.viewerPk) throw fail('account-changed');
+      const docs = typeof text === 'string' ? parseAll(text) : [];
+      const errors = docs.map((d) => JSON.stringify(d?.errors || d?.error || '')
+        + ` ${d?.message || ''} ${d?.error_type || ''} ${d?.spam ? 'spam' : ''}`).join(' ');
+      if (res.redirected || /^\s*</.test(text || '') || BLOCKED.test(errors)) throw fail('blocked', 900000);
+      if (!res.ok || !docs.length || docs.some((d) => !d?.data || (Array.isArray(d.errors) ? d.errors.length : d.errors)
+        || d.error || d.status === 'fail')) throw fail('error', 60000);
+      // A 200 alone is not success. Require an explicit relationship confirmation, scoped to
+      // the target when a user id is supplied. Unknown responses stop the batch for inspection.
+      let confirmed = false, stillFollowing = false, remaining = 2000;
+      const walk = (node, depth = 0) => {
+        if (!node || typeof node !== 'object' || depth > 12 || --remaining < 0) return;
+        const pk = node.pk ?? node.pk_id ?? node.id;
+        if (node.friendship_status && (pk == null || String(pk) === u.pk)) {
+          confirmed ||= node.friendship_status.following === false;
+          stillFollowing ||= node.friendship_status.following === true || node.friendship_status.outgoing_request === true;
+        }
+        for (const value of Object.values(node)) if (value && typeof value === 'object') walk(value, depth + 1);
+      };
+      docs.forEach((d) => walk(d.data));
+      if (!confirmed || stillFollowing) throw fail('unconfirmed', 60000);
+    } finally { clearTimeout(timer); }
+  }
+
+  async function runUnfollow(s) {
+    const report = (state, extra = {}) => send({ source: 'ighd-nf-unfollow', id: s.id, state,
+      completed: s.completed, total: s.users.length, ...extra });
+    try {
+      report('running');
+      for (const u of s.users) {
+        if (s.cancelled) throw Object.assign(new Error('cancelled'), { stop: 'cancelled' });
+        if (s.completed) {
+          const pause = 4000 + Math.floor(Math.random() * 801) + (s.completed % 5 === 0 ? 300000 : 0);
+          report('running', { pauseUntil: Date.now() + pause });
+          await scanPause(s, pause);
+        }
+        report('running', { currentPk: u.pk });
+        await serial(() => unfollowOne(s, u));
+        s.completed++;
+        scanResult?.users.delete(u.pk);
+        report('running', { removedPk: u.pk });
+      }
+      report('done');
+    } catch (e) {
+      if (e.cool) coolDown(e.cool);
+      report(e.stop === 'cancelled' ? 'cancelled' : 'stopped', { reason: e.stop || 'error',
+        retryAt: Date.now() < retryAfterUntil ? retryAfterUntil : null });
+    } finally { if (unfollow === s) unfollow = null; }
+  }
+
+  function startUnfollow(id, pks) {
+    const refuse = (reason) => send({ source: 'ighd-nf-unfollow', id, state: 'refused', reason,
+      retryAt: Date.now() < retryAfterUntil ? retryAfterUntil : null });
+    if (scan || unfollow) return refuse('busy');
+    if (navigator.userActivation?.isActive !== true) return refuse('no-click');
+    if (!scanResult || scanResult.viewerPk !== cookie('ds_user_id')) return refuse('account-changed');
+    if (!Array.isArray(pks) || !pks.length || pks.length > scanResult.users.size
+      || new Set(pks).size !== pks.length || !pks.every((pk) => typeof pk === 'string' && scanResult.users.has(pk))) return refuse('invalid-selection');
+    if (Date.now() < retryAfterUntil) return refuse('cooldown');
+    unfollow = { id, viewerPk: scanResult.viewerPk, users: pks.map((pk) => scanResult.users.get(pk)), completed: 0, cancelled: false, wake: null };
+    runUnfollow(unfollow);
+  }
+
+  function cancelUnfollow(id) {
+    if (!unfollow || unfollow.id !== id) return;
+    // Do not abort a mutation already sent: report its confirmed outcome before stopping.
+    unfollow.cancelled = true;
+    unfollow.wake?.();
   }
 
   // ---------- Watching the site's own requests ----------
@@ -684,6 +840,7 @@
           headers: plainHeaders(init.headers || (a instanceof Request ? a.headers : null))
         };
         noteApiHeaders(url, req.headers);
+        noteMutationRequest(url, init.body);
       }
     } catch (_) {}
     const res = await origFetch.apply(this, args);
@@ -737,6 +894,7 @@
       body = sent;
       this.__igt.body = bodyText(body);
       noteApiHeaders(this.__igt.url, this.__igt.headers);
+      noteMutationRequest(this.__igt.url, body);
     }
     return origSend.call(this, body);
   };
@@ -759,6 +917,10 @@
       startScan(e.data.id);
     } else if (e.data?.source === 'ighd-nf-cancel' && typeof e.data.id === 'string') {
       cancelScan(e.data.id);
+    } else if (e.data?.source === 'ighd-nf-unfollow-start' && typeof e.data.id === 'string') {
+      startUnfollow(e.data.id, e.data.pks);
+    } else if (e.data?.source === 'ighd-nf-unfollow-cancel' && typeof e.data.id === 'string') {
+      cancelUnfollow(e.data.id);
     } else if (e.data?.source === 'ighd-log' && typeof e.data.text === 'string') {
       slog(e.data.text);
     } else if (e.data?.source === 'ighd-music-status-result'

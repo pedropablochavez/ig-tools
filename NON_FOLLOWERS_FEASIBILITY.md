@@ -1,10 +1,49 @@
 # Non-followers scan: feasibility (2026-10-22)
 
 Goal: on the owner's own profile, a "Scan non-followers" button that lists accounts the owner
-follows that do not follow back. Informational only: no unfollow button, no bulk actions.
+follows that do not follow back. The initial v2.6.0 scope was informational only. On 2026-10-26
+the owner requested and clarified selected unfollows in v2.6.4; this supersedes that earlier scope.
 
-Status: research only. No extension code was written. The approach needs the owner's approval
-because any active variant breaks the "Passive first" rule in AGENTS.md.
+## Selected unfollows (v2.6.4, 2026-10-26)
+
+The owner's new request adds per-account selection, batch Add to whitelist, and Unfollow selected
+with an explicit review / confirmation. The latest completed own-account scan defines eligible
+targets; no arbitrary account ids, duplicate ids or cross-account results are accepted. One
+website GraphQL `usePolarisUnfollowMutation` per selected account, sharing the existing serial
+queue / cooldown. Session tokens come from the loaded page only and remain in memory.
+
+Pacing uses the reference's unfollow defaults (separate from reading lists): 4–4.8 seconds between
+accounts plus 5 minutes after every 5 when another remains. Cancel stops remaining requests,
+including interrupting pauses; a request already sent may still complete. Errors / blocks / 429
+or uncertain responses stop without retrying. Success requires explicit relationship confirmation;
+unknown 2xx responses are not counted as successful and there is no extra verification search.
+
+This changes relationships and can incur action limits. Re-following a private account may need
+approval. Review copy, README, privacy policy, listing and site disclose this behavior. Verification
+uses synthetic requests and offline headless Brave UI only; no real relationship was changed.
+
+Status: historical review. b1 shipped in v2.6.0 after owner approval. The owner requested the
+reference tool's scan speed on 2026-10-26; v2.6.3 supersedes b1's page size and pacing as follows.
+
+## Faster scan (v2.6.3, 2026-10-26)
+
+- Requests 50 accounts per page on the same own-account list endpoints; actual server cursors are
+  followed unchanged even if Instagram returns fewer accounts. No parallel requests.
+- Matches the reference's default pacing: 1.3–2.3 seconds between requests, plus a 5–15 second
+  break after every 15 requests if another page remains. Cancel interrupts either wait.
+- For 879 followers / 1,074 following, full 50-account pages mean 18 + 22 = 40 requests. Average
+  scheduled waits total about 90 seconds, plus network time (roughly 2 minutes). This is an estimate,
+  not a measured logged-in result or a guarantee of server page sizes / response time.
+- Keeps own-profile trusted Start, shared serial queue / cooldown, 300-page cap, memory-only
+  results, and full stop on 429 / block / error with no automatic retry. Also stops on repeated
+  cursors, explicitly incomplete pagination, and either list's restriction flag.
+- The page size differs from the observed website requests. Fewer requests do not establish lower
+  account risk; no attempt was made to provoke a rate limit or block.
+- Reference source inspected on 2026-10-26:
+  [page size and timing defaults](https://github.com/davidarroyo1234/InstagramUnfollowers/blob/master/src/constants/constants.ts)
+  and [request pacing](https://github.com/davidarroyo1234/InstagramUnfollowers/blob/master/src/main.tsx).
+
+The remainder records the original v2.6.0 review and its earlier constraints, not the current timings.
 
 ## What the website does (observed)
 

@@ -26,7 +26,8 @@ IG Tools (Unofficial) adds practical media controls to the desktop website:
 • See song titles, artists and original audio credits when the page provides them.
 • See whether a profile you visit follows you, from the profile data the page already loaded.
 • On your own profile, scan which accounts you follow don't follow you back (on request, with a
-  progress indicator and Cancel), and export that list as a CSV file. Report only: no unfollowing.
+  progress indicator and Cancel), and export that list as a CSV file. Select accounts to add to your
+  whitelist together, or review and explicitly confirm selected unfollows.
   Keep a whitelist of accounts you follow on purpose; verified accounts are left out unless shown.
 • See a direct-message conversation's theme (background and bubble colors) set in the mobile app.
 • Pause or resume music, adjust volume and let playback follow the visible post.
@@ -36,10 +37,18 @@ extension audio player handles browsers that require a first click for webpage a
 
 The extension reads media data the website supplies to your session. For missing song or full-video
 details, it can request the same individual post information the website uses. When you start a
-non-followers scan on your own profile, it reads your own Followers and Following lists with the
-website's list request, one page at a time with 2–4 second pauses, and stops at the first rate limit,
+non-followers scan on your own profile, it reads your own Followers and Following list endpoints,
+requesting 50 accounts per page rather than the website's observed 12. It makes one request at a time
+with 1.3–2.3 second pauses and an extra 5–15 second break every 15 requests, and stops at the first rate limit,
 block or error without retrying. Instagram may limit accounts for automated activity; use it rarely. It does not unlock
 private accounts, bypass access restrictions, or make unavailable media downloadable.
+
+Selected unfollows are a separate, confirmed action on completed scan results. Review the exact
+accounts, then confirm to send Instagram's own unfollow mutation, one request at a time with
+4–4.8 second pauses and an extra 5-minute break every 5 accounts. Cancel stops remaining actions;
+an already sent request may complete. Any limit, error or unconfirmed outcome stops the batch
+without retrying. Only confirmed changes are removed from the results. Session tokens stay in
+memory and are used only with Instagram. Following private accounts again may require approval.
 
 No analytics, advertising, telemetry or developer servers. Temporary media caches are bounded.
 Only the music volume preference is remembered locally. Media and music still use your connection;
@@ -68,8 +77,11 @@ attach user-initiated download controls and select the visible post for playback
 are requested from the site's same-origin single-post endpoint. The site's own conversation request is
 sent with its chat theme flag enabled so the theme is included. Only when the user presses Start scan on
 their own profile, the pages of the user's own Followers / Following lists are requested from the site's
-same-origin list endpoint (the request the website uses for those dialogs), one at a time, to show which
-followed accounts do not follow back; results stay in tab memory. No other website access is requested.
+same-origin list endpoints, one at a time with larger requested pages, to show which followed accounts
+do not follow back; results stay in tab memory. Separately reviewed and confirmed selected results
+can be unfollowed through Instagram's own GraphQL mutation. Selection alone makes no requests;
+mutations run serially with pauses and stop on limits, errors or uncertain outcomes. No other website
+access is requested.
 
 ### downloads
 
